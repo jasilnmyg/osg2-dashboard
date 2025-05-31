@@ -479,7 +479,7 @@ with tab2:
         st.markdown('</div>', unsafe_allow_html=True)
 
     # Load default future store list
-    future_df = pd.read_excel("/workspaces/osg-dashboard-app/files/Future Store List.xlsx")
+    future_df = pd.read_excel("Future Store List.xlsx")
     st.success("✅ Loaded default Future Store List.")
 
     if book2_file:
