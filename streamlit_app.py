@@ -478,7 +478,7 @@ with tab2:
     book2_file = st.file_uploader("Upload Daily Sales Report", type=["xlsx"], key="r2_book1")
 
     # Load Future Store List
-    future_df = pd.read_excel("/workspaces/osg2-dashboard/files/Future Store List.xlsx")
+    future_df = pd.read_excel("Future Store List.xlsx")
     st.success("✅ Loaded default Future Store List.")
 
     if book2_file:
