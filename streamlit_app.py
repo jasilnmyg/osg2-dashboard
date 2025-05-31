@@ -468,25 +468,28 @@ with tab2:
         </div>
         """, unsafe_allow_html=True)
 
-    # File upload section
-    with st.container():
-        st.markdown('<div class="file-upload-section">', unsafe_allow_html=True)
-        book2_file = st.file_uploader(
-            "Upload Daily Sales Report", 
-            type=["xlsx"],
-            key="r2_book1"
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
+    # Date and Time selection
+    selected_date = st.date_input("Select Date", value=datetime.today())
+    time_slot = st.selectbox("Select Time Slot", options=["12:30PM", "1PM", "4PM", "6PM"])
+    formatted_date = selected_date.strftime("%d-%m-%Y")
+    report_title = f"{formatted_date} EW Sale Till {time_slot}"
 
-    # Load default future store list
-    future_df = pd.read_excel("Future Store List.xlsx")
+    # File uploader for sales report
+    book2_file = st.file_uploader("Upload Daily Sales Report", type=["xlsx"], key="r2_book1")
+
+    # Load Future Store List
+    future_df = pd.read_excel("/workspaces/osg2-dashboard/files/Future Store List.xlsx")
     st.success("✅ Loaded default Future Store List.")
 
     if book2_file:
         with st.spinner('Processing data...'):
             book2_df = pd.read_excel(book2_file)
             book2_df.rename(columns={'Branch': 'Store'}, inplace=True)
-            agg = book2_df.groupby('Store', as_index=False).agg({'QUANTITY': 'sum', 'AMOUNT': 'sum'})
+
+            agg = book2_df.groupby('Store', as_index=False).agg({
+                'QUANTITY': 'sum',
+                'AMOUNT': 'sum'
+            })
 
             all_stores = pd.DataFrame(pd.concat([future_df['Store'], agg['Store']]).unique(), columns=['Store'])
             merged = all_stores.merge(agg, on='Store', how='left')
@@ -494,67 +497,87 @@ with tab2:
             merged['AMOUNT'] = merged['AMOUNT'].fillna(0).astype(int)
 
             merged = merged.sort_values(by='AMOUNT', ascending=False).reset_index(drop=True)
+
             total = pd.DataFrame([{
                 'Store': 'TOTAL',
                 'QUANTITY': merged['QUANTITY'].sum(),
                 'AMOUNT': merged['AMOUNT'].sum()
             }])
+
             final_df = pd.concat([merged, total], ignore_index=True)
             final_df.rename(columns={'Store': 'Branch'}, inplace=True)
 
-            def generate_report2_excel(df):
+            # Excel report generator
+            def generate_report2_excel(df, title_text):
                 wb = Workbook()
                 ws = wb.active
                 ws.title = "Store Report"
 
+                # Title
+                ws.merge_cells('A1:C1')
+                title_cell = ws['A1']
+                title_cell.value = title_text
+                title_cell.font = Font(bold=True, size=11, color="FFFFFF")
+                title_cell.alignment = Alignment(horizontal='center')
+                title_cell.fill = PatternFill("solid", fgColor="4F81BD")
+
+                # Styles
                 header_fill = PatternFill("solid", fgColor="4F81BD")
                 data_fill = PatternFill("solid", fgColor="DCE6F1")
                 red_fill = PatternFill("solid", fgColor="F4CCCC")
                 total_fill = PatternFill("solid", fgColor="FFD966")
                 border = Border(left=Side(style='thin'), right=Side(style='thin'),
                                 top=Side(style='thin'), bottom=Side(style='thin'))
-                bold_font = Font(bold=True)
                 header_font = Font(bold=True, color="FFFFFF")
+                bold_font = Font(bold=True)
 
-                for r_idx, row in enumerate(dataframe_to_rows(df, index=False, header=True), 1):
+                for r_idx, row in enumerate(dataframe_to_rows(df, index=False, header=True), start=2):
                     for c_idx, value in enumerate(row, 1):
                         cell = ws.cell(row=r_idx, column=c_idx, value=value)
-                        if r_idx == 1:
+
+                        if r_idx == 2:
                             cell.fill = header_fill
                             cell.font = header_font
-                        elif df.loc[r_idx - 2, 'Branch'] == 'TOTAL':
+                        elif df.loc[r_idx - 3, 'Branch'] == 'TOTAL':
                             cell.fill = total_fill
                             cell.font = bold_font
-                        elif df.loc[r_idx - 2, 'AMOUNT'] <= 0:
+                        elif df.loc[r_idx - 3, 'AMOUNT'] <= 0:
                             cell.fill = red_fill
                         else:
                             cell.fill = data_fill
+
                         cell.border = border
                         cell.alignment = Alignment(horizontal='center')
 
-                for column_cells in ws.columns:
-                    length = max(len(str(cell.value)) for cell in column_cells if cell.value)
-                    ws.column_dimensions[column_cells[0].column_letter].width = length + 2
+                # Adjust column widths
+                for col_idx, column_cells in enumerate(ws.columns, start=1):
+                    max_length = 0
+                    for cell in column_cells:
+                        try:
+                            if cell.value:
+                                max_length = max(max_length, len(str(cell.value)))
+                        except:
+                            pass
+                    ws.column_dimensions[get_column_letter(col_idx)].width = max_length + 2
 
-                buf = BytesIO()
-                wb.save(buf)
-                buf.seek(0)
-                return buf
+                buffer = BytesIO()
+                wb.save(buffer)
+                buffer.seek(0)
+                return buffer
 
-            excel_buf2 = generate_report2_excel(final_df)
+            excel_buf2 = generate_report2_excel(final_df, report_title)
 
         with st.container():
-            st.markdown('<div class="download-section">', unsafe_allow_html=True)
             st.download_button(
                 label="📥 Download Store Summary Report",
                 data=excel_buf2,
-                file_name="Store_Summary_Report.xlsx",
+                file_name=f"Store_Summary_{formatted_date}_{time_slot}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 help="Download store summary report in Excel format"
             )
-            st.markdown('</div>', unsafe_allow_html=True)
     else:
         st.info("ℹ️ Please upload the Daily Sales Report to generate the store summary.")
+
 
 
 # --------------------------- REPORT 3 TAB ---------------------------
