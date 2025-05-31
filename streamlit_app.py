@@ -287,7 +287,7 @@ with tab1:
     # Load default files
     try:
         store_list_file = "Myg All Store.xlsx"
-        rbm_bdm_file = ""
+        rbm_bdm_file = "RBM,BDM,BRANCH.xlsx"
         future_store_df = pd.read_excel(store_list_file)
         rbm_bdm_df = pd.read_excel(rbm_bdm_file)
         st.success("✅ Loaded default Future Store List.")
