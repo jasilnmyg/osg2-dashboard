@@ -18,232 +18,125 @@ import streamlit.components.v1 as components
 
 st.set_page_config(
     page_title="OSG DASHBOARD",
-    page_icon="🚀",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Animated gradient background + glassmorphism + neon glow CSS + tab animations
+# Professional corporate CSS
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@700&family=Poppins&display=swap');
-
 :root {
-  --dark-bg: #0f111a;
-  --panel-bg: rgba(20, 23, 35, 0.75);
-  --panel-blur: 12px;
-  --neon-blue: #00ffff;
-  --neon-pink: #ff00ff;
-  --neon-purple: #9d00ff;
-  --text-primary: #e0e0ff;
-  --text-secondary: #f484fa;
-  --glow-shadow: 0 0 8px var(--neon-blue);
-  --btn-glow: 0 0 12px var(--neon-pink);
+    --primary: #2c3e50;
+    --secondary: #34495e;
+    --accent: #3498db;
+    --light-bg: #f8f9fa;
+    --text: #2c3e50;
+    --border: #dfe6e9;
 }
 
-/* Animated gradient background */
-body, .stApp {
-  margin: 0; padding: 0;
-  background: linear-gradient(270deg, #090a1a, #1a0a2e, #100a23);
-  background-size: 600% 600%;
-  animation: gradientShift 20s ease infinite;
-  font-family: 'Poppins', sans-serif;
-  color: var(--text-primary);
-  overflow-x: hidden;
+/* Main app styling */
+.stApp {
+    background-color: #f5f7fa;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
 
-@keyframes gradientShift {
-  0% {background-position:0% 50%;}
-  50% {background-position:100% 50%;}
-  100% {background-position:0% 50%;}
+/* Header styling */
+.header {
+    font-size: 28px;
+    font-weight: 600;
+    color: var(--primary);
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
 }
 
-/* Dashboard header */
-.dashboard-header {
-  background: var(--panel-bg);
-  backdrop-filter: blur(var(--panel-blur));
-  border-radius: 1.5rem 1.5rem 0 0;
-  padding: 2.2rem 3rem;
-  box-shadow: var(--glow-shadow);
-  user-select: none;
-  text-align: center;
-  border: 1px solid var(--neon-blue);
+/* Info box styling */
+.info-box {
+    background-color: white;
+    border-left: 4px solid var(--accent);
+    padding: 15px;
+    margin-bottom: 20px;
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 
-.header-title {
-  font-family: 'Orbitron', sans-serif;
-  font-size: 3rem;
-  font-weight: 700;
-  color: var(--neon-pink);
-  letter-spacing: 0.2em;
-  margin-bottom: 0.3rem;
-  text-transform: uppercase;
-  text-shadow:
-    0 0 8px var(--neon-pink),
-    0 0 15px var(--neon-pink);
-}
-
-.header-subtitle {
-  font-size: 1.2rem;
-  color: var(--text-secondary);
-  font-weight: 500;
-  letter-spacing: 0.08em;
-}
-
-/* Tabs container */
+/* Tabs styling */
 .stTabs [data-baseweb="tab-list"] {
-  display: flex !important;
-  justify-content: center;
-  gap: 2rem;
-  margin-top: 2rem;
-  margin-bottom: 2rem;
+    gap: 5px;
+    margin-bottom: 20px;
 }
 
-/* Tabs */
 .stTabs [data-baseweb="tab"] {
-  background: var(--panel-bg);
-  backdrop-filter: blur(var(--panel-blur));
-  border: 2px solid transparent;
-  border-radius: 50px;
-  padding: 0.7rem 2.8rem;
-  font-weight: 700;
-  color: var(--text-secondary);
-  font-size: 1.2rem;
-  cursor: pointer;
-  position: relative;
-  transition: color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
-  user-select: none;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  box-shadow: 0 0 6px transparent;
-  display: flex;
-  align-items: center;
-  gap: 0.8rem;
+    background: white !important;
+    border: 1px solid var(--border) !important;
+    border-bottom: none !important;
+    border-radius: 4px 4px 0 0 !important;
+    padding: 8px 20px !important;
+    font-weight: 500 !important;
+    color: var(--secondary) !important;
 }
 
-/* Neon glow effect on hover */
 .stTabs [data-baseweb="tab"]:hover {
-  color: var(--neon-pink);
-  border-color: var(--neon-pink);
-  box-shadow:
-    0 0 10px var(--neon-pink),
-    0 0 20px var(--neon-pink);
+    color: var(--accent) !important;
 }
 
-/* Active tab neon underline + glow */
 .stTabs [aria-selected="true"] {
-  color: var(--neon-pink);
-  border-color: var(--neon-pink);
-  box-shadow:
-    0 0 20px var(--neon-pink),
-    0 0 30px var(--neon-pink);
+    color: var(--accent) !important;
+    font-weight: 600 !important;
+    border-bottom: 2px solid var(--accent) !important;
 }
 
-.stTabs [aria-selected="true"]::after {
-  content: "";
-  position: absolute;
-  bottom: -10px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 60%;
-  height: 3px;
-  border-radius: 20px;
-  background: linear-gradient(90deg, var(--neon-pink), var(--neon-purple));
-  animation: neonPulse 1.8s ease infinite;
-  filter: drop-shadow(0 0 5px var(--neon-pink));
+/* File uploader styling */
+.stFileUploader>div>div {
+    border: 1px dashed var(--border) !important;
+    background: white !important;
+    border-radius: 4px !important;
+    padding: 30px 0 !important;
 }
 
-@keyframes neonPulse {
-  0%, 100% {
-    opacity: 1;
-    filter: drop-shadow(0 0 10px var(--neon-pink));
-  }
-  50% {
-    opacity: 0.5;
-    filter: drop-shadow(0 0 5px var(--neon-pink));
-  }
+.stFileUploader>div>div:hover {
+    border-color: var(--accent) !important;
 }
 
-/* File uploader */
-.stFileUpload {
-  background: var(--panel-bg) !important;
-  border-radius: 1.2rem !important;
-  border: 2px dashed var(--neon-blue) !important;
-  padding: 3rem 0 !important;
-  color: var(--text-secondary) !important;
-  font-weight: 600 !important;
-  font-size: 1.2rem !important;
-  transition: border-color 0.3s ease, box-shadow 0.3s ease !important;
-  text-align: center !important;
-  user-select: none;
-  box-shadow: 0 0 6px transparent !important;
-  margin-bottom: 3rem !important;
+/* Button styling */
+.stButton>button {
+    background-color: var(--accent) !important;
+    color: white !important;
+    border-radius: 4px !important;
+    border: none !important;
+    padding: 10px 24px !important;
+    font-weight: 500 !important;
 }
 
-.stFileUpload:hover {
-  border-color: var(--neon-pink) !important;
-  box-shadow:
-    0 0 15px var(--neon-pink) !important;
-  color: var(--neon-pink) !important;
-  cursor: pointer;
+.stButton>button:hover {
+    background-color: #2980b9 !important;
+    color: white !important;
+    box-shadow: none !important;
 }
 
-/* Button style */
-.stButton > button {
-  background: linear-gradient(135deg, var(--neon-pink), var(--neon-purple));
-  box-shadow:
-    0 0 12px var(--neon-pink),
-    0 0 18px var(--neon-purple);
-  border-radius: 40px;
-  padding: 0.8rem 3rem;
-  font-weight: 700;
-  font-size: 1.15rem;
-  color: white;
-  transition: all 0.4s ease;
-  user-select: none;
-}
-
-.stButton > button:hover {
-  box-shadow:
-    0 0 20px var(--neon-pink),
-    0 0 30px var(--neon-purple);
-  transform: translateY(-3px);
-}
-
-/* Dataframe style */
+/* Dataframe styling */
 div[data-testid="stDataFrameContainer"] {
-  background: var(--panel-bg);
-  border-radius: 1rem;
-  padding: 1rem 2rem;
-  box-shadow: 0 0 15px rgba(157, 0, 255, 0.2);
-  font-family: 'Poppins', sans-serif;
-  color: var(--text-primary);
+    border: 1px solid var(--border) !important;
+    border-radius: 4px !important;
 }
 
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: var(--neon-pink);
-  border-radius: 20px;
-  box-shadow: 0 0 10px var(--neon-pink);
+/* Success message */
+.stSuccess {
+    background-color: rgba(52, 152, 219, 0.1) !important;
+    border-left: 4px solid var(--accent) !important;
 }
 
-/* Icons inside tabs */
-.stTabs [data-baseweb="tab"] svg {
-  width: 22px;
-  height: 22px;
-  fill: var(--text-secondary);
-  transition: fill 0.3s ease;
+/* Date input styling */
+.stDateInput>div>div>input {
+    border: 1px solid var(--border) !important;
+    border-radius: 4px !important;
 }
-.stTabs [data-baseweb="tab"]:hover svg,
-.stTabs [aria-selected="true"] svg {
-  fill: var(--neon-pink);
+
+/* Select box styling */
+.stSelectbox>div>div>div {
+    border: 1px solid var(--border) !important;
+    border-radius: 4px !important;
 }
 </style>
 """, unsafe_allow_html=True)
