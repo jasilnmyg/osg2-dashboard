@@ -290,7 +290,7 @@ with tab1:
         rbm_bdm_file = "RBM,BDM,BRANCH.xlsx"
         future_store_df = pd.read_excel(store_list_file)
         rbm_bdm_df = pd.read_excel(rbm_bdm_file)
-        st.success("✅ Loaded default Future Store List.")
+        st.success("✅ Loaded default Future Store List & Store,RBM,BDM List.")
     except Exception as e:
         st.error(f"Error loading default store or RBM/BDM file: {e}")
         st.stop()
