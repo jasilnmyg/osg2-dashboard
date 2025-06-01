@@ -269,8 +269,8 @@ with tab1:
             <strong>Instructions:</strong> Upload the following three files to generate the sales summary report:
             <ul>
                 <li><strong>Full Month sales Data</strong></li>
-                <li><strong>myG All Store List</strong></li>
-                <li><strong>Store,RBM,BDM List</strong></li>
+                <li><strong>myG All Store List is loaded by default</strong></li>
+                <li><strong>Store,RBM,BDM List is loaded by default</strong></li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
@@ -463,7 +463,7 @@ with tab2:
             <strong>Instructions:</strong> Upload the following file to generate the store summary report:
             <ul>
                 <li><strong>Daily Sales Report</strong></li>
-                <li><strong>myG Future Store List</strong> is loaded by default.</li>
+                <li><strong>myG Future Store List</strong> is loaded by default</li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
