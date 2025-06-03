@@ -361,56 +361,7 @@ with tab1:
 
                     elements.append(main_table)
 
-                    # BDM-wise breakdown
-                    elements.append(Spacer(1, 20))
-                    for bdm in rbm_data['BDM'].dropna().unique():
-                        bdm_data = rbm_data[rbm_data['BDM'] == bdm]
-                        elements.append(Spacer(1, 12))
-                        elements.append(Paragraph(f"<b>BDM: {bdm}</b>", styles['Heading4']))
-                        
-                        bdm_table_data = [['Store', 'FTD Count', 'FTD Amount', 'MTD Count', 'MTD Amount']]
-                        
-                        # Add rows
-                        for idx, row in bdm_data.iterrows():
-                            bdm_table_data.append([
-                                row['Store'],
-                                int(row['FTD Count']),
-                                int(row['FTD Amount']),
-                                int(row['MTD Count']),
-                                int(row['MTD Amount'])
-                            ])
-                        
-                        # Calculate total for all stores under this BDM
-                        total_ftd_count = int(bdm_data['FTD Count'].sum())
-                        total_ftd_amount = int(bdm_data['FTD Amount'].sum())
-                        total_mtd_count = int(bdm_data['MTD Count'].sum())
-                        total_mtd_amount = int(bdm_data['MTD Amount'].sum())
-                        
-                        total_row = ['TOTAL', total_ftd_count, total_ftd_amount, total_mtd_count, total_mtd_amount]
-                        bdm_table_data.append(total_row)
-                        total_row_idx = len(bdm_table_data) - 1
-                        
-                        bdm_table = Table(bdm_table_data, colWidths=col_widths)
-                        
-                        # Style the table
-                        bdm_table.setStyle(base_table_style)
-                        
-                        # Apply red text color for rows where FTD Count or MTD Count is zero
-                        for i, row in enumerate(bdm_table_data[1:-1], start=1):  # skip header and total row
-                            if row[1] == 0:
-                                bdm_table.setStyle(TableStyle([('TEXTCOLOR', (1, i), (1, i), colors.red)]))
-                            if row[3] == 0:
-                                bdm_table.setStyle(TableStyle([('TEXTCOLOR', (3, i), (3, i), colors.red)]))
-                        
-                        # Style the total row
-                        bdm_table.setStyle(TableStyle([
-                            ('BACKGROUND', (0, total_row_idx), (-1, total_row_idx), colors.HexColor('#FFD966')),
-                            ('FONTNAME', (0, total_row_idx), (-1, total_row_idx), 'Helvetica-Bold'),
-                            ('ALIGN', (0, total_row_idx), (-1, total_row_idx), 'CENTER'),
-                        ]))
-                        
-                        elements.append(bdm_table)
-
+                   
 
                     doc.build(elements)
                     pdf_buffer.seek(0)
