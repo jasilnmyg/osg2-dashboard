@@ -27,38 +27,56 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Force light mode and disable dark mode
+# Improved CSS with proper light & dark mode using CSS variables
 st.markdown("""
 <style>
-/* Define light and dark themes explicitly */
-html {
-  --primary-light: #3498db;
-  --secondary-light: #2980b9;
-  --text-light: #2c3e50;
-  --bg-light: #ffffff;
-  --card-bg-light: #f8f9fa;
-  --border-light: #dfe6e9;
-
-  --primary-dark: #2980b9;
-  --secondary-dark: #1c5d99;
-  --text-dark: #ecf0f1;
-  --bg-dark: #1e293b;
-  --card-bg-dark: #334155;
-  --border-dark: #475569;
+:root {
+  /* Light theme colors */
+  --primary: #3498db;
+  --secondary: #2980b9;
+  --text-color: #2c3e50;
+  --background: #ffffff;
+  --card-background: #f8f9fa;
+  --border-color: #dfe6e9;
+  --shadow-color: rgba(0, 0, 0, 0.1);
+  --time-indicator-bg: var(--primary);
+  --time-indicator-text: #fff;
+  --file-uploader-border: var(--border-color);
+  --file-uploader-bg: var(--card-background);
+  --file-uploader-hover-border: var(--primary);
+  --file-uploader-hover-bg: rgba(52, 152, 219, 0.05);
+  --default-file-bg: rgba(52, 152, 219, 0.1);
+  --default-file-border: var(--primary);
+  --default-file-text: var(--text-color);
 }
 
-/* Set default (light) mode */
-body {
-  background-color: var(--bg-light);
-  color: var(--text-light);
-}
-
-/* Dark mode override */
 @media (prefers-color-scheme: dark) {
-  body {
-    background-color: var(--bg-dark);
-    color: var(--text-dark);
+  :root {
+    /* Dark theme colors */
+    --primary: #2980b9;
+    --secondary: #1c5d99;
+    --text-color: #ecf0f1;
+    --background: #1e293b;
+    --card-background: #334155;
+    --border-color: #475569;
+    --shadow-color: rgba(0, 0, 0, 0.4);
+    --time-indicator-bg: var(--primary);
+    --time-indicator-text: #fff;
+    --file-uploader-border: var(--border-color);
+    --file-uploader-bg: var(--card-background);
+    --file-uploader-hover-border: var(--primary);
+    --file-uploader-hover-bg: rgba(41, 128, 185, 0.1);
+    --default-file-bg: rgba(41, 128, 185, 0.2);
+    --default-file-border: var(--primary);
+    --default-file-text: var(--text-color);
   }
+}
+
+/* General Body */
+body {
+  background-color: var(--background);
+  color: var(--text-color);
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 /* Card Styling */
@@ -66,17 +84,10 @@ body {
     border-radius: 12px;
     padding: 1.5rem;
     margin-bottom: 1.5rem;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-    border-left: 4px solid var(--primary-light);
-    background-color: var(--card-bg-light);
-}
-
-@media (prefers-color-scheme: dark) {
-    .report-card {
-        background-color: var(--card-bg-dark);
-        border-left: 4px solid var(--primary-dark);
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
-    }
+    box-shadow: 0 4px 6px -1px var(--shadow-color);
+    border-left: 4px solid var(--primary);
+    background-color: var(--card-background);
+    transition: background-color 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
 }
 
 /* Title Styling */
@@ -84,16 +95,9 @@ body {
     font-size: 1.75rem;
     font-weight: 700;
     margin-bottom: 0.5rem;
-    border-bottom: 2px solid var(--primary-light);
+    border-bottom: 2px solid var(--primary);
     padding-bottom: 0.5rem;
-    color: var(--text-light);
-}
-
-@media (prefers-color-scheme: dark) {
-    .report-title {
-        color: var(--text-dark);
-        border-bottom: 2px solid var(--primary-dark);
-    }
+    color: var(--text-color);
 }
 
 /* Subtitle */
@@ -101,55 +105,32 @@ body {
     font-size: 1.25rem;
     font-weight: 600;
     margin: 1rem 0 0.5rem 0;
-    color: var(--text-light);
-}
-
-@media (prefers-color-scheme: dark) {
-    .report-subtitle {
-        color: var(--text-dark);
-    }
+    color: var(--text-color);
 }
 
 /* Time Indicator */
 .time-indicator {
     display: inline-block;
-    background-color: var(--primary-light);
-    color: white;
+    background-color: var(--time-indicator-bg);
+    color: var(--time-indicator-text);
     padding: 0.25rem 0.75rem;
     border-radius: 20px;
     font-size: 0.9rem;
     font-weight: 500;
 }
 
-@media (prefers-color-scheme: dark) {
-    .time-indicator {
-        background-color: var(--primary-dark);
-    }
-}
-
 /* File Uploader */
 .stFileUploader > div > div {
-    border: 2px dashed var(--border-light);
+    border: 2px dashed var(--file-uploader-border);
     border-radius: 12px;
     padding: 2rem;
-    background-color: var(--card-bg-light);
+    background-color: var(--file-uploader-bg);
     transition: all 0.3s ease;
 }
 
 .stFileUploader > div > div:hover {
-    border-color: var(--primary-light);
-    background-color: rgba(52, 152, 219, 0.05);
-}
-
-@media (prefers-color-scheme: dark) {
-    .stFileUploader > div > div {
-        border: 2px dashed var(--border-dark);
-        background-color: var(--card-bg-dark);
-    }
-    .stFileUploader > div > div:hover {
-        border-color: var(--primary-dark);
-        background-color: rgba(41, 128, 185, 0.1);
-    }
+    border-color: var(--file-uploader-hover-border);
+    background-color: var(--file-uploader-hover-bg);
 }
 
 /* Default File Message */
@@ -158,20 +139,14 @@ body {
     margin-top: 1rem;
     padding: 0.75rem;
     border-radius: 8px;
-    border-left: 3px solid var(--primary-light);
-    background-color: rgba(52, 152, 219, 0.1);
-    color: var(--text-light);
-}
-
-@media (prefers-color-scheme: dark) {
-    .default-file {
-        background-color: rgba(41, 128, 185, 0.2);
-        border-left: 3px solid var(--primary-dark);
-        color: var(--text-dark);
-    }
+    border-left: 3px solid var(--default-file-border);
+    background-color: var(--default-file-bg);
+    color: var(--default-file-text);
+    transition: background-color 0.3s ease, color 0.3s ease;
 }
 </style>
 """, unsafe_allow_html=True)
+
 
 
 # Neon glowing icons as SVG for tabs (can also use emojis or images)
