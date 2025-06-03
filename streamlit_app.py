@@ -17,7 +17,7 @@ import io
 import streamlit.components.v1 as components
 from openpyxl.utils import get_column_letter
 import time
-import streamlit_authenticator as stauth
+
 
 
 st.set_page_config(
