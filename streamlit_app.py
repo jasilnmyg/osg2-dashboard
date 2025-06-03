@@ -192,7 +192,7 @@ with tab1:
         future_store_df = pd.read_excel(store_list_file)
         rbm_bdm_df = pd.read_excel(rbm_bdm_file)
         st.success("✅ Loaded default Future Store List & Store,RBM,BDM List.")
-        st.info("ℹ️ Please upload the Daily Sales Report to generate the store summary in bottom")
+        
     except Exception as e:
         st.error(f"Error loading default store or RBM/BDM file: {e}")
         st.stop()
@@ -348,7 +348,7 @@ with tab1:
 
             except Exception as e:
                 st.error(f"❌ Error: {e}")
-            
+   
 
 
 # --------------------------- REPORT 2 TAB ---------------------------
@@ -473,8 +473,7 @@ with tab2:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 help="Download store summary report in Excel format"
             )
-    else:
-        st.info("ℹ️ Please upload the Daily Sales Report to generate the store summary.")
+    
 # --------------------------- REPORT 3 TAB ---------------------------
 with tab3:
     st.markdown('<h1 class="header">OSG & Product Data Mapping</h1>', unsafe_allow_html=True)
@@ -698,5 +697,4 @@ with tab3:
                 help="Download the mapped OSG and product data in Excel format"
             )
             st.markdown('</div>', unsafe_allow_html=True)
-    else:
-        st.info("ℹ️ Please upload both required files to perform data mapping.")
+    
