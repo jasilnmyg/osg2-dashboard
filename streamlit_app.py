@@ -17,7 +17,16 @@ import io
 import streamlit.components.v1 as components
 from openpyxl.utils import get_column_letter
 import time
+from reportlab.lib.pagesizes import A4, letter
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 
+# If you also need these for more advanced PDF features:
+from reportlab.pdfgen import canvas
+from reportlab.lib.utils import ImageReader
 
 
 st.set_page_config(
@@ -27,56 +36,38 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Improved CSS with proper light & dark mode using CSS variables
+# Force light mode and disable dark mode
 st.markdown("""
 <style>
-:root {
-  /* Light theme colors */
-  --primary: #3498db;
-  --secondary: #2980b9;
-  --text-color: #2c3e50;
-  --background: #ffffff;
-  --card-background: #f8f9fa;
-  --border-color: #dfe6e9;
-  --shadow-color: rgba(0, 0, 0, 0.1);
-  --time-indicator-bg: var(--primary);
-  --time-indicator-text: #fff;
-  --file-uploader-border: var(--border-color);
-  --file-uploader-bg: var(--card-background);
-  --file-uploader-hover-border: var(--primary);
-  --file-uploader-hover-bg: rgba(52, 152, 219, 0.05);
-  --default-file-bg: rgba(52, 152, 219, 0.1);
-  --default-file-border: var(--primary);
-  --default-file-text: var(--text-color);
+/* Define light and dark themes explicitly */
+html {
+  --primary-light: #3498db;
+  --secondary-light: #2980b9;
+  --text-light: #2c3e50;
+  --bg-light: #ffffff;
+  --card-bg-light: #f8f9fa;
+  --border-light: #dfe6e9;
+
+  --primary-dark: #2980b9;
+  --secondary-dark: #1c5d99;
+  --text-dark: #ecf0f1;
+  --bg-dark: #1e293b;
+  --card-bg-dark: #334155;
+  --border-dark: #475569;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    /* Dark theme colors */
-    --primary: #2980b9;
-    --secondary: #1c5d99;
-    --text-color: #ecf0f1;
-    --background: #1e293b;
-    --card-background: #334155;
-    --border-color: #475569;
-    --shadow-color: rgba(0, 0, 0, 0.4);
-    --time-indicator-bg: var(--primary);
-    --time-indicator-text: #fff;
-    --file-uploader-border: var(--border-color);
-    --file-uploader-bg: var(--card-background);
-    --file-uploader-hover-border: var(--primary);
-    --file-uploader-hover-bg: rgba(41, 128, 185, 0.1);
-    --default-file-bg: rgba(41, 128, 185, 0.2);
-    --default-file-border: var(--primary);
-    --default-file-text: var(--text-color);
-  }
-}
-
-/* General Body */
+/* Set default (light) mode */
 body {
-  background-color: var(--background);
-  color: var(--text-color);
-  transition: background-color 0.3s ease, color 0.3s ease;
+  background-color: var(--bg-light);
+  color: var(--text-light);
+}
+
+/* Dark mode override */
+@media (prefers-color-scheme: dark) {
+  body {
+    background-color: var(--bg-dark);
+    color: var(--text-dark);
+  }
 }
 
 /* Card Styling */
@@ -84,10 +75,17 @@ body {
     border-radius: 12px;
     padding: 1.5rem;
     margin-bottom: 1.5rem;
-    box-shadow: 0 4px 6px -1px var(--shadow-color);
-    border-left: 4px solid var(--primary);
-    background-color: var(--card-background);
-    transition: background-color 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    border-left: 4px solid var(--primary-light);
+    background-color: var(--card-bg-light);
+}
+
+@media (prefers-color-scheme: dark) {
+    .report-card {
+        background-color: var(--card-bg-dark);
+        border-left: 4px solid var(--primary-dark);
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
+    }
 }
 
 /* Title Styling */
@@ -95,9 +93,16 @@ body {
     font-size: 1.75rem;
     font-weight: 700;
     margin-bottom: 0.5rem;
-    border-bottom: 2px solid var(--primary);
+    border-bottom: 2px solid var(--primary-light);
     padding-bottom: 0.5rem;
-    color: var(--text-color);
+    color: var(--text-light);
+}
+
+@media (prefers-color-scheme: dark) {
+    .report-title {
+        color: var(--text-dark);
+        border-bottom: 2px solid var(--primary-dark);
+    }
 }
 
 /* Subtitle */
@@ -105,32 +110,55 @@ body {
     font-size: 1.25rem;
     font-weight: 600;
     margin: 1rem 0 0.5rem 0;
-    color: var(--text-color);
+    color: var(--text-light);
+}
+
+@media (prefers-color-scheme: dark) {
+    .report-subtitle {
+        color: var(--text-dark);
+    }
 }
 
 /* Time Indicator */
 .time-indicator {
     display: inline-block;
-    background-color: var(--time-indicator-bg);
-    color: var(--time-indicator-text);
+    background-color: var(--primary-light);
+    color: white;
     padding: 0.25rem 0.75rem;
     border-radius: 20px;
     font-size: 0.9rem;
     font-weight: 500;
 }
 
+@media (prefers-color-scheme: dark) {
+    .time-indicator {
+        background-color: var(--primary-dark);
+    }
+}
+
 /* File Uploader */
 .stFileUploader > div > div {
-    border: 2px dashed var(--file-uploader-border);
+    border: 2px dashed var(--border-light);
     border-radius: 12px;
     padding: 2rem;
-    background-color: var(--file-uploader-bg);
+    background-color: var(--card-bg-light);
     transition: all 0.3s ease;
 }
 
 .stFileUploader > div > div:hover {
-    border-color: var(--file-uploader-hover-border);
-    background-color: var(--file-uploader-hover-bg);
+    border-color: var(--primary-light);
+    background-color: rgba(52, 152, 219, 0.05);
+}
+
+@media (prefers-color-scheme: dark) {
+    .stFileUploader > div > div {
+        border: 2px dashed var(--border-dark);
+        background-color: var(--card-bg-dark);
+    }
+    .stFileUploader > div > div:hover {
+        border-color: var(--primary-dark);
+        background-color: rgba(41, 128, 185, 0.1);
+    }
 }
 
 /* Default File Message */
@@ -139,14 +167,20 @@ body {
     margin-top: 1rem;
     padding: 0.75rem;
     border-radius: 8px;
-    border-left: 3px solid var(--default-file-border);
-    background-color: var(--default-file-bg);
-    color: var(--default-file-text);
-    transition: background-color 0.3s ease, color 0.3s ease;
+    border-left: 3px solid var(--primary-light);
+    background-color: rgba(52, 152, 219, 0.1);
+    color: var(--text-light);
+}
+
+@media (prefers-color-scheme: dark) {
+    .default-file {
+        background-color: rgba(41, 128, 185, 0.2);
+        border-left: 3px solid var(--primary-dark);
+        color: var(--text-dark);
+    }
 }
 </style>
 """, unsafe_allow_html=True)
-
 
 
 # Neon glowing icons as SVG for tabs (can also use emojis or images)
@@ -161,195 +195,526 @@ tab1, tab2, tab3 = st.tabs(list(tab_icons.keys()))
 
 
 # --------------------------- REPORT 1 TAB ---------------------------
+import streamlit as st
+import pandas as pd
+from datetime import datetime
+from io import BytesIO
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
 
+
+# --------------------------- REPORT 1 TAB ---------------------------
 with tab1:
     st.markdown('<h1 class="header">OSG All Store Report</h1>', unsafe_allow_html=True)
-    with st.container():
-        st.markdown("""
+
+    st.markdown("""
         <div class="info-box">
-            <strong>Instructions:</strong> Upload the following three files to generate the sales summary report:
+            <strong>Instructions:</strong> Upload the following files to generate the sales summary report:
             <ul>
-                <li><strong>Full Month sales Data</strong></li>
+                <li><strong>Current Month sales Data</strong></li>
+                <li><strong>Previous Month sales Data</strong></li>
                 <li><strong>myG All Store List is loaded by default</strong></li>
-                <li><strong>Store,RBM,BDM List is loaded by default</strong></li>
+                <li><strong>Store, RBM, BDM List is loaded by default</strong></li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
 
-    col1, col2 = st.columns([1, 3])
+    col1, col2 = st.columns(2)
     with col1:
-        report_date = st.date_input("Select report date", value=datetime.today(), key="report1_date")
+        report_date = st.date_input("Select current report date", value=datetime.today())
+    with col2:
+        prev_date = st.date_input("Select previous report date (for comparison)", value=datetime.today().replace(day=1))
 
-    with st.container():
-        st.markdown('<div class="file-upload-section">', unsafe_allow_html=True)
-        book1_file = st.file_uploader("Upload full month sales data", type=["xlsx"], key="book1_uploader")
-        st.markdown('</div>', unsafe_allow_html=True)
+    book1_file = st.file_uploader("Upload current month sales data", type=["xlsx"], key="curr_sales")
+    prev_month_file = st.file_uploader("Upload previous month sales data", type=["xlsx"], key="prev_sales")
 
-    # Load default files
+    store_list_file = "/workspaces/osg2-dashboard/Myg All Store.xlsx"
+    rbm_bdm_file = "/workspaces/osg2-dashboard/RBM,BDM,BRANCH.xlsx"
+
     try:
-        store_list_file = "Myg All Store.xlsx"
-        rbm_bdm_file = "RBM,BDM,BRANCH.xlsx"
         future_store_df = pd.read_excel(store_list_file)
         rbm_bdm_df = pd.read_excel(rbm_bdm_file)
         st.success("✅ Loaded default Future Store List & Store,RBM,BDM List.")
-        
     except Exception as e:
-        st.error(f"Error loading default store or RBM/BDM file: {e}")
+        st.error(f"Error loading defaults: {e}")
         st.stop()
 
     if book1_file:
-        with st.spinner('Processing data...'):
-            try:
-                book1_df = pd.read_excel(book1_file)
-                book1_df.rename(columns={'Branch': 'Store'}, inplace=True)
-                rbm_bdm_df.rename(columns={'Branch': 'Store'}, inplace=True)
+        book1_df = pd.read_excel(book1_file)
+        book1_df.rename(columns={'Branch': 'Store'}, inplace=True)
+        book1_df['DATE'] = pd.to_datetime(book1_df['DATE'], dayfirst=True, errors='coerce')
+        book1_df = book1_df.dropna(subset=['DATE'])
+        rbm_bdm_df.rename(columns={'Branch': 'Store'}, inplace=True)
 
-                book1_df['DATE'] = pd.to_datetime(book1_df['DATE'], dayfirst=True, errors='coerce')
-                book1_df = book1_df.dropna(subset=['DATE'])
-                today = pd.to_datetime(report_date)
+        today = pd.to_datetime(report_date)
+        mtd_df = book1_df[book1_df['DATE'].dt.month == today.month]
+        today_df = mtd_df[mtd_df['DATE'].dt.date == today.date()]
 
-                mtd_df = book1_df[book1_df['DATE'].dt.month == today.month]
-                today_df = mtd_df[mtd_df['DATE'].dt.date == today.date()]
+        today_agg = today_df.groupby('Store', as_index=False).agg({'QUANTITY': 'sum', 'AMOUNT': 'sum'}).rename(columns={'QUANTITY': 'FTD Count', 'AMOUNT': 'FTD Amount'})
+        mtd_agg = mtd_df.groupby('Store', as_index=False).agg({'QUANTITY': 'sum', 'AMOUNT': 'sum'}).rename(columns={'QUANTITY': 'MTD Count', 'AMOUNT': 'MTD Amount'})
 
-                today_agg = today_df.groupby('Store', as_index=False).agg({'QUANTITY': 'sum', 'AMOUNT': 'sum'}).rename(columns={'QUANTITY': 'FTD Count', 'AMOUNT': 'FTD Amount'})
-                mtd_agg = mtd_df.groupby('Store', as_index=False).agg({'QUANTITY': 'sum', 'AMOUNT': 'sum'}).rename(columns={'QUANTITY': 'MTD Count', 'AMOUNT': 'MTD Amount'})
+        if prev_month_file:
+            prev_df = pd.read_excel(prev_month_file)
+            prev_df.rename(columns={'Branch': 'Store'}, inplace=True)
+            prev_df['DATE'] = pd.to_datetime(prev_df['DATE'], dayfirst=True, errors='coerce')
+            prev_df = prev_df.dropna(subset=['DATE'])
+            prev_month = pd.to_datetime(prev_date)
+            prev_mtd_df = prev_df[prev_df['DATE'].dt.month == prev_month.month]
+            prev_mtd_agg = prev_mtd_df.groupby('Store', as_index=False).agg({'AMOUNT': 'sum'}).rename(columns={'AMOUNT': 'PRV MTD'})
+        else:
+            prev_mtd_agg = pd.DataFrame(columns=['Store', 'PRV MTD'])
 
-                all_store_names = pd.Series(pd.concat([future_store_df['Store'], book1_df['Store']]).unique(), name='Store')
-                report_df = pd.DataFrame(all_store_names)
-                report_df = report_df.merge(today_agg, on='Store', how='left').merge(mtd_agg, on='Store', how='left')
-                report_df[['FTD Count', 'FTD Amount', 'MTD Count', 'MTD Amount']] = report_df[['FTD Count', 'FTD Amount', 'MTD Count', 'MTD Amount']].fillna(0).astype(int)
-                report_df = report_df.merge(rbm_bdm_df[['Store', 'RBM', 'BDM']], on='Store', how='left')
-                report_df = report_df.sort_values('MTD Amount', ascending=False)
+        all_stores = pd.DataFrame(pd.Series(pd.concat([future_store_df['Store'], book1_df['Store']]).unique(), name='Store'))
+        report_df = all_stores.merge(today_agg, on='Store', how='left') \
+                              .merge(mtd_agg, on='Store', how='left') \
+                              .merge(prev_mtd_agg, on='Store', how='left') \
+                              .merge(rbm_bdm_df[['Store', 'RBM', 'BDM']], on='Store', how='left')
 
-                header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
-                header_font = Font(bold=True, color="FFFFFF")
-                data_fill = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid")
-                zero_qty_fill = PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")
-                total_fill = PatternFill(start_color="FFD966", end_color="FFD966", fill_type="solid")
-                border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+        report_df[['FTD Count', 'FTD Amount', 'MTD Count', 'MTD Amount']] = report_df[['FTD Count', 'FTD Amount', 'MTD Count', 'MTD Amount']].fillna(0).astype(int)
+        report_df['PRV MTD'] = report_df['PRV MTD'].fillna(0).astype(int)
+        report_df['DIFF %'] = report_df.apply(
+            lambda x: round(((x['MTD Amount'] - x['PRV MTD']) / x['PRV MTD']) * 100, 2) if x['PRV MTD'] != 0 else 0,
+            axis=1
+        )
 
-                columns_to_use = ['Store', 'FTD Count', 'FTD Amount', 'MTD Count', 'MTD Amount']
+        report_df['ASP'] = report_df.apply(
+            lambda x: round(x['MTD Amount'] / x['MTD Count'], 2) if x['MTD Count'] != 0 else 0,
+            axis=1
+        )
 
-                def write_to_sheet(ws, data):
-                    for r_idx, row in enumerate(dataframe_to_rows(data[columns_to_use], index=False, header=True), 1):
-                        for c_idx, value in enumerate(row, 1):
-                            cell = ws.cell(row=r_idx, column=c_idx, value=value)
-                            if r_idx == 1:
-                                cell.fill = header_fill
-                                cell.font = header_font
-                            else:
-                                ftd_qty = row[1] if len(row) > 1 else 0
-                                mtd_qty = row[3] if len(row) > 3 else 0
-                                cell.fill = zero_qty_fill if ftd_qty == 0 or mtd_qty == 0 else data_fill
-                            cell.border = border
-                            cell.alignment = Alignment(horizontal='center')
-                    total_row_idx = ws.max_row + 1
-                    ws.cell(row=total_row_idx, column=1, value="TOTAL").fill = total_fill
-                    ws.cell(row=total_row_idx, column=1).font = Font(bold=True)
-                    ws.cell(row=total_row_idx, column=1).alignment = Alignment(horizontal='center')
-                    ws.cell(row=total_row_idx, column=1).border = border
+        excel_output = BytesIO()
+        with pd.ExcelWriter(excel_output, engine='xlsxwriter') as writer:
+            workbook = writer.book
 
-                    for col_idx in range(2, len(columns_to_use) + 1):
-                        total_value = data[columns_to_use[col_idx - 1]].sum()
-                        cell = ws.cell(row=total_row_idx, column=col_idx, value=int(total_value))
-                        cell.fill = total_fill
-                        cell.font = Font(bold=True)
-                        cell.border = border
-                        cell.alignment = Alignment(horizontal='center')
+            colors_palette = {
+                'primary_blue': '#1E3A8A',
+                'light_blue': '#DBEAFE',
+                'success_green': '#065F46',
+                'light_green': '#D1FAE5',
+                'warning_orange': '#EA580C',
+                'light_orange': '#FED7AA',
+                'danger_red': '#DC2626',
+                'light_red': '#FEE2E2',
+                'accent_purple': '#7C3AED',
+                'light_purple': '#EDE9FE',
+                'neutral_gray': '#6B7280',
+                'light_gray': '#F9FAFB',
+                'white': '#FFFFFF',
+                'dark_blue': '#0F172A',
+                'mint_green': '#10B981',
+                'light_mint': '#ECFDF5',
+                'royal_blue': '#3B82F6',
+                'light_royal': '#EBF8FF'
+            }
 
-                wb = Workbook()
-                wb.remove(wb.active)
-                ws = wb.create_sheet(title="All_Stores")
-                write_to_sheet(ws, report_df)
+            formats = {
+                'title': workbook.add_format({
+                    'bold': True, 'font_size': 16, 'font_color': colors_palette['primary_blue'],
+                    'align': 'center', 'valign': 'vcenter', 'bg_color': colors_palette['white'],
+                    'border': 1, 'border_color': colors_palette['primary_blue']
+                }),
+                'subtitle': workbook.add_format({
+                    'bold': True, 'font_size': 12, 'font_color': colors_palette['neutral_gray'],
+                    'align': 'center', 'valign': 'vcenter', 'italic': True
+                }),
+                'header_main': workbook.add_format({
+                    'bold': True, 'font_size': 11, 'font_color': colors_palette['white'],
+                    'bg_color': colors_palette['primary_blue'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['primary_blue'], 'text_wrap': True
+                }),
+                'header_secondary': workbook.add_format({
+                    'bold': True, 'font_size': 10, 'font_color': colors_palette['primary_blue'],
+                    'bg_color': colors_palette['light_blue'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['primary_blue']
+                }),
+                'data_normal': workbook.add_format({
+                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['white']
+                }),
+                'data_alternate': workbook.add_format({
+                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['light_gray']
+                }),
+                'data_store_name': workbook.add_format({
+                    'font_size': 10, 'bold': True, 'align': 'left', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['white'], 'indent': 1
+                }),
+                'data_store_name_alt': workbook.add_format({
+                    'font_size': 10, 'bold': True, 'align': 'left', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['light_gray'], 'indent': 1
+                }),
+                'positive_value': workbook.add_format({
+                    'font_size': 10, 'font_color': colors_palette['success_green'], 'bg_color': colors_palette['light_green'],
+                    'align': 'center', 'valign': 'vcenter', 'border': 1, 'border_color': colors_palette['success_green'], 'bold': True
+                }),
+                'negative_value': workbook.add_format({
+                    'font_size': 10, 'font_color': colors_palette['danger_red'], 'bg_color': colors_palette['light_red'],
+                    'align': 'center', 'valign': 'vcenter', 'border': 1, 'border_color': colors_palette['danger_red'], 'bold': True
+                }),
+                'zero_value': workbook.add_format({
+                    'font_size': 10, 'font_color': colors_palette['warning_orange'], 'bg_color': colors_palette['light_orange'],
+                    'align': 'center', 'valign': 'vcenter', 'border': 1, 'border_color': colors_palette['warning_orange'], 'bold': True
+                }),
+                'total_row': workbook.add_format({
+                    'bold': True, 'font_size': 11, 'font_color': colors_palette['white'],
+                    'bg_color': colors_palette['accent_purple'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 2, 'border_color': colors_palette['accent_purple']
+                }),
+                'total_label': workbook.add_format({
+                    'bold': True, 'font_size': 11, 'font_color': colors_palette['white'],
+                    'bg_color': colors_palette['accent_purple'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 2, 'border_color': colors_palette['accent_purple']
+                }),
+                'rbm_title': workbook.add_format({
+                    'bold': True, 'font_size': 18, 'font_color': colors_palette['white'],
+                    'bg_color': colors_palette['dark_blue'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 2, 'border_color': colors_palette['dark_blue']
+                }),
+                'rbm_subtitle': workbook.add_format({
+                    'bold': True, 'font_size': 11, 'font_color': colors_palette['dark_blue'],
+                    'bg_color': colors_palette['light_royal'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['royal_blue'], 'italic': True
+                }),
+                'rbm_header': workbook.add_format({
+                    'bold': True, 'font_size': 11, 'font_color': colors_palette['white'],
+                    'bg_color': colors_palette['royal_blue'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['royal_blue'], 'text_wrap': True
+                }),
+                'rbm_data_normal': workbook.add_format({
+                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['white']
+                }),
+                'rbm_data_alternate': workbook.add_format({
+                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['light_royal']
+                }),
+                'rbm_store_name': workbook.add_format({
+                    'font_size': 10, 'bold': True, 'align': 'left', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['white'], 'indent': 1
+                }),
+                'rbm_store_name_alt': workbook.add_format({
+                    'font_size': 10, 'bold': True, 'align': 'left', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['light_royal'], 'indent': 1
+                }),
+                'rbm_positive': workbook.add_format({
+                    'font_size': 10, 'font_color': colors_palette['mint_green'], 'bg_color': colors_palette['light_mint'],
+                    'align': 'center', 'valign': 'vcenter', 'border': 1, 'border_color': colors_palette['mint_green'], 'bold': True
+                }),
+                'rbm_negative': workbook.add_format({
+                    'font_size': 10, 'font_color': colors_palette['danger_red'], 'bg_color': colors_palette['light_red'],
+                    'align': 'center', 'valign': 'vcenter', 'border': 1, 'border_color': colors_palette['danger_red'], 'bold': True
+                }),
+                'rbm_zero': workbook.add_format({
+                    'font_size': 10, 'font_color': colors_palette['warning_orange'], 'bg_color': colors_palette['light_orange'],
+                    'align': 'center', 'valign': 'vcenter', 'border': 1, 'border_color': colors_palette['warning_orange'], 'bold': True
+                }),
+                'rbm_total': workbook.add_format({
+                    'bold': True, 'font_size': 12, 'font_color': colors_palette['white'],
+                    'bg_color': colors_palette['mint_green'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 2, 'border_color': colors_palette['mint_green']
+                }),
+                'rbm_total_label': workbook.add_format({
+                    'bold': True, 'font_size': 12, 'font_color': colors_palette['white'],
+                    'bg_color': colors_palette['mint_green'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 2, 'border_color': colors_palette['mint_green']
+                }),
+                'rbm_summary': workbook.add_format({
+                    'bold': True, 'font_size': 10, 'font_color': colors_palette['royal_blue'],
+                    'bg_color': colors_palette['light_royal'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['royal_blue']
+                }),
+                'rbm_performance': workbook.add_format({
+                    'bold': True, 'font_size': 10, 'font_color': colors_palette['white'],
+                    'bg_color': colors_palette['accent_purple'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['accent_purple']
+                }),
+                'asp_format': workbook.add_format({
+                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'num_format': '₹#,##0.00'
+                }),
+                'asp_format_alt': workbook.add_format({
+                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['light_royal'], 'num_format': '₹#,##0.00'
+                }),
+                'asp_total': workbook.add_format({
+                    'bold': True, 'font_size': 12, 'font_color': colors_palette['white'],
+                    'bg_color': colors_palette['mint_green'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 2, 'border_color': colors_palette['mint_green'], 'num_format': '₹#,##0.00'
+                })
+            }
 
-                for rbm in report_df['RBM'].dropna().unique():
-                    rbm_data = report_df[report_df['RBM'] == rbm].sort_values('MTD Amount', ascending=False)
-                    ws_rbm = wb.create_sheet(title=rbm[:30])
-                    write_to_sheet(ws_rbm, rbm_data)
+            # ALL STORES SHEET
+            all_data = report_df.sort_values('MTD Amount', ascending=False)
+            worksheet = workbook.add_worksheet("All Stores")
 
-                excel_buffer = BytesIO()
-                wb.save(excel_buffer)
-                excel_buffer.seek(0)
+            column_widths = [25, 12, 15, 12, 15]
+            for i, width in enumerate(column_widths):
+                worksheet.set_column(i, i, width)
 
-                # PDF Report
-                styles = getSampleStyleSheet()
-                base_table_style = TableStyle([
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#003366')),
-                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                    ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                    ('FONTSIZE', (0, 0), (-1, -1), 8),
-                    ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.lightgrey]),
-                ])
-                col_widths = [150, 60, 60, 60, 60]
+            worksheet.merge_range(0, 0, 0, 4, "OSG All Stores Sales Report", formats['title'])
+            worksheet.merge_range(1, 0, 1, 4, f"Report Generated: {datetime.now().strftime('%d %B %Y')}", formats['subtitle'])
 
-                pdf_files = []
-                for rbm in report_df['RBM'].dropna().unique():
-                    rbm_data = report_df[report_df['RBM'] == rbm].sort_values('MTD Amount', ascending=False)
-                    if rbm_data.empty:
-                        continue
-                    pdf_buffer = BytesIO()
-                    doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
-                    elements = [
-                        Paragraph(f"<b><font size=14>{rbm} Report</font></b>", styles['Title']),
-                        Paragraph(f"Generated on: {datetime.now().strftime('%d-%m-%Y')}", styles['Normal']),
-                        Spacer(1, 12)
-                    ]
+            total_stores = len(all_data)
+            active_stores = len(all_data[all_data['FTD Count'] > 0])
+            inactive_stores = total_stores - active_stores
 
-                    table_data = [['Store', 'FTD Count', 'FTD Amount', 'MTD Count', 'MTD Amount']]
-                    cell_styles = []
+            worksheet.merge_range(3, 0, 3, 1, "📊 SUMMARY", formats['header_secondary'])
+            worksheet.merge_range(3, 2, 3, 4, f"Total: {total_stores} | Active: {active_stores} | Inactive: {inactive_stores}", formats['data_normal'])
 
-                    for row_idx, (_, row) in enumerate(rbm_data.iterrows(), start=1):
-                        table_row = [
-                            row['Store'],
-                            int(row['FTD Count']),
-                            int(row['FTD Amount']),
-                            int(row['MTD Count']),
-                            int(row['MTD Amount'])
-                        ]
-                        table_data.append(table_row)
-                        if row['FTD Count'] == 0:
-                            cell_styles.append(('TEXTCOLOR', (1, row_idx), (1, row_idx), colors.red))
-                        if row['MTD Count'] == 0:
-                            cell_styles.append(('TEXTCOLOR', (3, row_idx), (3, row_idx), colors.red))
+            headers = ['Store Name', 'FTD Count', 'FTD Amount', 'MTD Count', 'MTD Amount']
+            for col, header in enumerate(headers):
+                worksheet.write(5, col, header, formats['header_main'])
 
-                    total_row = [
-                        'TOTAL',
-                        int(rbm_data['FTD Count'].sum()),
-                        int(rbm_data['FTD Amount'].sum()),
-                        int(rbm_data['MTD Count'].sum()),
-                        int(rbm_data['MTD Amount'].sum())
-                    ]
-                    table_data.append(total_row)
-                    total_row_idx = len(table_data) - 1
-                    cell_styles.extend([
-                        ('BACKGROUND', (0, total_row_idx), (-1, total_row_idx), colors.HexColor('#FFD966')),
-                        ('FONTNAME', (0, total_row_idx), (-1, total_row_idx), 'Helvetica-Bold'),
-                    ])
+            for row_idx, (_, row) in enumerate(all_data.iterrows(), start=6):
+                is_alternate = (row_idx - 6) % 2 == 1
+                store_format = formats['data_store_name_alt'] if is_alternate else formats['data_store_name']
+                worksheet.write(row_idx, 0, row['Store'], store_format)
 
-                    main_table = Table(table_data, colWidths=col_widths)
-                    main_table.setStyle(base_table_style)
-                    for style in cell_styles:
-                        main_table.setStyle(TableStyle([style]))
+                ftd_count = int(row['FTD Count'])
+                if ftd_count == 0:
+                    worksheet.write(row_idx, 1, ftd_count, formats['zero_value'])
+                else:
+                    worksheet.write(row_idx, 1, ftd_count, formats['positive_value'])
 
-                    elements.append(main_table)
+                data_format = formats['data_alternate'] if is_alternate else formats['data_normal']
+                worksheet.write(row_idx, 2, int(row['FTD Amount']), data_format)
 
-                   
+                mtd_count = int(row['MTD Count'])
+                if mtd_count == 0:
+                    worksheet.write(row_idx, 3, mtd_count, formats['zero_value'])
+                else:
+                    worksheet.write(row_idx, 3, mtd_count, formats['positive_value'])
 
-                    doc.build(elements)
-                    pdf_buffer.seek(0)
-                    pdf_files.append((rbm, pdf_buffer))
+                worksheet.write(row_idx, 4, int(row['MTD Amount']), data_format)
 
-                st.download_button("Download Excel Report", data=excel_buffer, file_name=f"OSG_All_Store_Report_{today.strftime('%Y%m%d')}.xlsx")
-                for rbm, pdf_buf in pdf_files:
-                    st.download_button(label=f"Download {rbm} PDF Report", data=pdf_buf, file_name=f"{rbm}_Report_{today.strftime('%Y%m%d')}.pdf")
+            total_row = len(all_data) + 7
+            worksheet.write(total_row, 0, '🎯 TOTAL', formats['total_label'])
+            worksheet.write(total_row, 1, all_data['FTD Count'].sum(), formats['total_row'])
+            worksheet.write(total_row, 2, all_data['FTD Amount'].sum(), formats['total_row'])
+            worksheet.write(total_row, 3, all_data['MTD Count'].sum(), formats['total_row'])
+            worksheet.write(total_row, 4, all_data['MTD Amount'].sum(), formats['total_row'])
 
-            except Exception as e:
-                st.error(f"❌ Error: {e}")
-   
+            if len(all_data) > 0:
+                top_performer = all_data.iloc[0]
+                insights_row = total_row + 2
+                worksheet.merge_range(insights_row, 0, insights_row, 4,
+                                    f"🏆 Top Performer: {top_performer['Store']} (₹{int(top_performer['MTD Amount']):,})",
+                                    formats['positive_value'])
 
+            # RBM SHEETS
+            for rbm in report_df['RBM'].dropna().unique():
+                rbm_data = report_df[report_df['RBM'] == rbm].sort_values('MTD Amount', ascending=False)
+                worksheet_name = rbm[:31] if len(rbm) > 31 else rbm
+                rbm_ws = workbook.add_worksheet(worksheet_name)
+
+                rbm_column_widths = [25, 12, 15, 12, 15, 15, 12, 12]
+                for i, width in enumerate(rbm_column_widths):
+                    rbm_ws.set_column(i, i, width)
+
+                rbm_ws.merge_range(0, 0, 0, 7, f" {rbm} - Sales Performance Report", formats['rbm_title'])
+                rbm_ws.merge_range(1, 0, 1, 7, f"Report Period: {datetime.now().strftime('%B %Y')} | Generated: {datetime.now().strftime('%d %B %Y')}", formats['rbm_subtitle'])
+
+                rbm_total_stores = len(rbm_data)
+                rbm_active_stores = len(rbm_data[rbm_data['FTD Count'] > 0])
+                rbm_inactive_stores = rbm_total_stores - rbm_active_stores
+                rbm_total_amount = rbm_data['MTD Amount'].sum()
+
+                rbm_ws.merge_range(3, 0, 3, 1, "📈 PERFORMANCE OVERVIEW", formats['rbm_summary'])
+                rbm_ws.merge_range(3, 2, 3, 7, f"Total Stores: {rbm_total_stores} | Active: {rbm_active_stores} | Inactive: {rbm_inactive_stores} | Total Revenue: ₹{rbm_total_amount:,}", formats['rbm_summary'])
+
+                if len(rbm_data) > 0:
+                    best_performer = rbm_data.iloc[0]
+                    rbm_ws.merge_range(4, 0, 4, 7, f"🥇 Best Performer: {best_performer['Store']} - ₹{int(best_performer['MTD Amount']):,}", formats['rbm_performance'])
+
+                headers = ['Store Name', 'FTD Count', 'FTD Amount', 'MTD Count', 'MTD Amount', 'PRV MTD', 'DIFF %', 'ASP']
+                for col, header in enumerate(headers):
+                    rbm_ws.write(6, col, header, formats['rbm_header'])
+
+                for row_idx, (_, row) in enumerate(rbm_data.iterrows(), start=7):
+                    is_alternate = (row_idx - 7) % 2 == 1
+                    store_format = formats['rbm_store_name_alt'] if is_alternate else formats['rbm_store_name']
+                    rbm_ws.write(row_idx, 0, row['Store'], store_format)
+
+                    ftd_count = int(row['FTD Count'])
+                    if ftd_count == 0:
+                        rbm_ws.write(row_idx, 1, ftd_count, formats['rbm_zero'])
+                    else:
+                        rbm_ws.write(row_idx, 1, ftd_count, formats['rbm_positive'])
+
+                    data_format = formats['rbm_data_alternate'] if is_alternate else formats['rbm_data_normal']
+                    rbm_ws.write(row_idx, 2, int(row['FTD Amount']), data_format)
+
+                    mtd_count = int(row['MTD Count'])
+                    if mtd_count == 0:
+                        rbm_ws.write(row_idx, 3, mtd_count, formats['rbm_zero'])
+                    else:
+                        rbm_ws.write(row_idx, 3, mtd_count, formats['rbm_positive'])
+
+                    rbm_ws.write(row_idx, 4, int(row['MTD Amount']), data_format)
+                    rbm_ws.write(row_idx, 5, int(row['PRV MTD']), data_format)
+
+                    diff_pct = row['DIFF %']
+                    if diff_pct > 0:
+                        rbm_ws.write(row_idx, 6, f"{diff_pct}%", formats['rbm_positive'])
+                    elif diff_pct < 0:
+                        rbm_ws.write(row_idx, 6, f"{diff_pct}%", formats['rbm_negative'])
+                    else:
+                        rbm_ws.write(row_idx, 6, f"{diff_pct}%", formats['rbm_zero'])
+
+                    asp_format = formats['asp_format_alt'] if is_alternate else formats['asp_format']
+                    rbm_ws.write(row_idx, 7, row['ASP'], asp_format)
+
+                total_row = len(rbm_data) + 8
+                rbm_ws.write(total_row, 0, '🎯 TOTAL', formats['rbm_total_label'])
+                rbm_ws.write(total_row, 1, rbm_data['FTD Count'].sum(), formats['rbm_total'])
+                rbm_ws.write(total_row, 2, rbm_data['FTD Amount'].sum(), formats['rbm_total'])
+                rbm_ws.write(total_row, 3, rbm_data['MTD Count'].sum(), formats['rbm_total'])
+                rbm_ws.write(total_row, 4, rbm_data['MTD Amount'].sum(), formats['rbm_total'])
+                rbm_ws.write(total_row, 5, rbm_data['PRV MTD'].sum(), formats['rbm_total'])
+
+                total_prev = rbm_data['PRV MTD'].sum()
+                total_curr = rbm_data['MTD Amount'].sum()
+                overall_growth = round(((total_curr - total_prev) / total_prev) * 100, 2) if total_prev != 0 else 0
+
+                if overall_growth > 0:
+                    rbm_ws.write(total_row, 6, f"{overall_growth}%", formats['rbm_total'])
+                elif overall_growth < 0:
+                    rbm_ws.write(total_row, 6, f"{overall_growth}%", formats['rbm_total'])
+                else:
+                    rbm_ws.write(total_row, 6, f"{overall_growth}%", formats['rbm_total'])
+
+                total_mtd_count = rbm_data['MTD Count'].sum()
+                total_mtd_amount = rbm_data['MTD Amount'].sum()
+                overall_asp = round(total_mtd_amount / total_mtd_count, 2) if total_mtd_count != 0 else 0
+                rbm_ws.write(total_row, 7, overall_asp, formats['asp_total'])
+
+                insights_row = total_row + 2
+                if overall_growth > 15:
+                    rbm_ws.merge_range(insights_row, 0, insights_row, 7,
+                                     f"📈 Excellent Growth: {overall_growth}% increase from previous month",
+                                     formats['rbm_positive'])
+                elif overall_growth < 0:
+                    rbm_ws.merge_range(insights_row, 0, insights_row, 7,
+                                     f"📉 Needs Attention: {abs(overall_growth)}% decrease from previous month",
+                                     formats['rbm_negative'])
+                else:
+                    rbm_ws.merge_range(insights_row, 0, insights_row, 7,
+                                     f"📊 Stable Performance: Less change from previous month",
+                                     formats['rbm_zero'])
+
+                insights_row += 1
+                top_3_stores = rbm_data.head(3)
+                if len(top_3_stores) > 0:
+                    top_stores_text = " | ".join([f"{store['Store']}: ₹{int(store['MTD Amount']):,}"
+                                                for _, store in top_3_stores.iterrows()])
+                    rbm_ws.merge_range(insights_row, 0, insights_row, 7,
+                                     f"🏆 Top 3 Performers: {top_stores_text}",
+                                     formats['rbm_summary'])
+
+            # BDM REPORT SHEET
+            bdm_data = report_df.groupby('BDM').agg({
+                'FTD Count': 'sum',
+                'FTD Amount': 'sum',
+                'MTD Count': 'sum',
+                'MTD Amount': 'sum'
+            }).reset_index().sort_values('MTD Amount', ascending=False)
+
+            bdm_ws = workbook.add_worksheet("BDM Report")
+
+            bdm_column_widths = [25, 12, 15, 12, 15]
+            for i, width in enumerate(bdm_column_widths):
+                bdm_ws.set_column(i, i, width)
+
+            bdm_ws.merge_range(0, 0, 0, 4, "BDM Sales Performance Report", formats['rbm_title'])
+            bdm_ws.merge_range(1, 0, 1, 4, f"Report Period: {datetime.now().strftime('%B %Y')} | Generated: {datetime.now().strftime('%d %B %Y')}", formats['rbm_subtitle'])
+
+            bdm_total_bdms = len(bdm_data)
+            bdm_active_bdms = len(bdm_data[bdm_data['FTD Count'] > 0])
+            bdm_inactive_bdms = bdm_total_bdms - bdm_active_bdms
+            bdm_total_amount = bdm_data['MTD Amount'].sum()
+
+            bdm_ws.merge_range(3, 0, 3, 1, "📈 PERFORMANCE OVERVIEW", formats['rbm_summary'])
+            bdm_ws.merge_range(3, 2, 3, 4, f"Total BDMs: {bdm_total_bdms} | Active: {bdm_active_bdms} | Inactive: {bdm_inactive_bdms} | Total Revenue: ₹{bdm_total_amount:,}", formats['rbm_summary'])
+
+            if len(bdm_data) > 0:
+                best_performer = bdm_data.iloc[0]
+                bdm_ws.merge_range(4, 0, 4, 4, f"🥇 Best Performer: {best_performer['BDM']} - ₹{int(best_performer['MTD Amount']):,}", formats['rbm_performance'])
+
+            headers = ['BDM Name', 'FTD Count', 'FTD Amount', 'MTD Count', 'MTD Amount']
+            for col, header in enumerate(headers):
+                bdm_ws.write(6, col, header, formats['rbm_header'])
+
+            for row_idx, (_, row) in enumerate(bdm_data.iterrows(), start=7):
+                is_alternate = (row_idx - 7) % 2 == 1
+                bdm_format = formats['rbm_store_name_alt'] if is_alternate else formats['rbm_store_name']
+                bdm_ws.write(row_idx, 0, row['BDM'], bdm_format)
+
+                ftd_count = int(row['FTD Count'])
+                if ftd_count == 0:
+                    bdm_ws.write(row_idx, 1, ftd_count, formats['rbm_zero'])
+                else:
+                    bdm_ws.write(row_idx, 1, ftd_count, formats['rbm_positive'])
+
+                data_format = formats['rbm_data_alternate'] if is_alternate else formats['rbm_data_normal']
+                bdm_ws.write(row_idx, 2, int(row['FTD Amount']), data_format)
+
+                mtd_count = int(row['MTD Count'])
+                if mtd_count == 0:
+                    bdm_ws.write(row_idx, 3, mtd_count, formats['rbm_zero'])
+                else:
+                    bdm_ws.write(row_idx, 3, mtd_count, formats['rbm_positive'])
+
+                bdm_ws.write(row_idx, 4, int(row['MTD Amount']), data_format)
+
+            total_row = len(bdm_data) + 8
+            bdm_ws.write(total_row, 0, '🎯 TOTAL', formats['rbm_total_label'])
+            bdm_ws.write(total_row, 1, bdm_data['FTD Count'].sum(), formats['rbm_total'])
+            bdm_ws.write(total_row, 2, bdm_data['FTD Amount'].sum(), formats['rbm_total'])
+            bdm_ws.write(total_row, 3, bdm_data['MTD Count'].sum(), formats['rbm_total'])
+            bdm_ws.write(total_row, 4, bdm_data['MTD Amount'].sum(), formats['rbm_total'])
+
+            insights_row = total_row + 2
+            top_3_bdms = bdm_data.head(3)
+            if len(top_3_bdms) > 0:
+                top_bdms_text = " | ".join([f"{bdm['BDM']}: ₹{int(bdm['MTD Amount']):,}"
+                                          for _, bdm in top_3_bdms.iterrows()])
+                bdm_ws.merge_range(insights_row, 0, insights_row, 4,
+                                 f"🏆 Top 3 Performers: {top_bdms_text}",
+                                 formats['rbm_summary'])
+
+        excel_output.seek(0)
+        st.success("✅ Excel report generated successfully!")
+        st.download_button(
+            label="📥 Download Detailed Excel Report",
+            data=excel_output.getvalue(),
+            file_name=f"OSG_Sales_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            help="Click to download the comprehensive sales report with all RBM and BDM sheets"
+        )
+
+st.markdown("""
+    <style>
+    .insight-box {
+        background-color: #f8f9fa;
+        padding: 15px;
+        border-radius: 10px;
+        border-left: 4px solid #007bff;
+        margin: 10px 0;
+    }
+    .insight-box h4 {
+        color: #007bff;
+        margin-top: 0;
+    }
+    .insight-box ul {
+        margin-bottom: 0;
+    }
+    .insight-box li {
+        margin: 5px 0;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 # --------------------------- REPORT 2 TAB ---------------------------
 with tab2:
@@ -376,7 +741,7 @@ with tab2:
     book2_file = st.file_uploader("Upload Daily Sales Report", type=["xlsx"], key="r2_book1")
 
     # Load Future Store List
-    future_df = pd.read_excel("Future Store List.xlsx")
+    future_df = pd.read_excel("/workspaces/osg2-dashboard/Future Store List.xlsx")
     st.success("✅ Loaded default Future Store List.")
 
     if book2_file:
@@ -473,11 +838,12 @@ with tab2:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 help="Download store summary report in Excel format"
             )
-    
+    else:
+        st.info("ℹ️ Please upload the Daily Sales Report to generate the store summary.")
 # --------------------------- REPORT 3 TAB ---------------------------
 with tab3:
     st.markdown('<h1 class="header">OSG & Product Data Mapping</h1>', unsafe_allow_html=True)
-    
+
     with st.container():
         st.markdown("""
         <div class="info-box">
@@ -488,17 +854,17 @@ with tab3:
             </ul>
         </div>
         """, unsafe_allow_html=True)
-    
+
     # File upload section
     with st.container():
         st.markdown('<div class="file-upload-section">', unsafe_allow_html=True)
         osg_file = st.file_uploader(
-            "Upload OSG File", 
+            "Upload OSG File",
             type=["xlsx"],
             key="osg_mapping"
         )
         product_file = st.file_uploader(
-            "Upload PRODUCT File", 
+            "Upload PRODUCT File",
             type=["xlsx"],
             key="product_mapping"
         )
@@ -642,7 +1008,7 @@ with tab3:
             osg_df[['Manufacturer Warranty', 'Duration (Year)']] = osg_df['Retailer SKU'].apply(
                 lambda sku: pd.Series(extract_warranty_duration(sku))
             )
-            
+
             def highlight_row(row):
                 missing_fields = pd.isna(row.get('Model')) or str(row.get('Model')).strip() == ''
                 missing_fields |= pd.isna(row.get('IMEI')) or str(row.get('IMEI')).strip() == ''
@@ -652,7 +1018,7 @@ with tab3:
                 except:
                     missing_fields |= True
                 return ['background-color: lightblue'] * len(row) if missing_fields else [''] * len(row)
-            
+
             final_columns = [
                 'Customer Mobile', 'Date', 'Invoice Number','Product Invoice Number', 'Customer Name', 'Store Code', 'Branch', 'Region',
                 'IMEI', 'Category', 'Brand', 'Quantity', 'Item Code', 'Model', 'Plan Type', 'EWS QTY', 'Item Rate',
@@ -667,14 +1033,14 @@ with tab3:
             osg_df['Quantity'] = 1
             osg_df['EWS QTY'] = 1
             osg_df = osg_df[final_columns]
-            
+
             st.markdown("""
             <div class="success-box">
                 <strong>✅ Data Mapping Completed Successfully</strong>
                 <p>The OSG and product data has been successfully mapped. You can now download the report.</p>
             </div>
             """, unsafe_allow_html=True)
-            
+
             @st.cache_data
             def convert_df(df):
                output = io.BytesIO()
@@ -683,9 +1049,9 @@ with tab3:
                 styled_df.to_excel(writer, index=False)
                output.seek(0)
                return output
-            
+
             excel_data = convert_df(osg_df)
-        
+
         # Download section
         with st.container():
             st.markdown('<div class="download-section">', unsafe_allow_html=True)
@@ -697,4 +1063,5 @@ with tab3:
                 help="Download the mapped OSG and product data in Excel format"
             )
             st.markdown('</div>', unsafe_allow_html=True)
-    
+    else:
+        st.info("ℹ️ Please upload both required files to perform data mapping.")
