@@ -231,7 +231,7 @@ with tab1:
     prev_month_file = st.file_uploader("Upload previous month sales data", type=["xlsx"], key="prev_sales")
 
     store_list_file = "Myg All Store.xlsx"
-    rbm_bdm_file = "/workspaces/osg2-dashboard/RBM,BDM,BRANCH.xlsx"
+    rbm_bdm_file = "RBM,BDM,BRANCH.xlsx"
 
     try:
         future_store_df = pd.read_excel(store_list_file)
