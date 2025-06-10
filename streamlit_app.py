@@ -230,8 +230,8 @@ with tab1:
     book1_file = st.file_uploader("Upload current month sales data", type=["xlsx"], key="curr_sales")
     prev_month_file = st.file_uploader("Upload previous month sales data", type=["xlsx"], key="prev_sales")
 
-    store_list_file = "Myg All Store.xlsx"
-    rbm_bdm_file = "RBM,BDM,BRANCH.xlsx"
+    store_list_file = "/workspaces/osg2-dashboard/Myg All Store.xlsx"
+    rbm_bdm_file = "/workspaces/osg2-dashboard/RBM,BDM,BRANCH.xlsx"
 
     try:
         future_store_df = pd.read_excel(store_list_file)
@@ -262,9 +262,9 @@ with tab1:
             prev_df = prev_df.dropna(subset=['DATE'])
             prev_month = pd.to_datetime(prev_date)
             prev_mtd_df = prev_df[prev_df['DATE'].dt.month == prev_month.month]
-            prev_mtd_agg = prev_mtd_df.groupby('Store', as_index=False).agg({'AMOUNT': 'sum'}).rename(columns={'AMOUNT': 'PRV MTD'})
+            prev_mtd_agg = prev_mtd_df.groupby('Store', as_index=False).agg({'AMOUNT': 'sum'}).rename(columns={'AMOUNT': 'PREV MONTH SALE'})
         else:
-            prev_mtd_agg = pd.DataFrame(columns=['Store', 'PRV MTD'])
+            prev_mtd_agg = pd.DataFrame(columns=['Store', 'PREV MONTH SALE'])
 
         all_stores = pd.DataFrame(pd.Series(pd.concat([future_store_df['Store'], book1_df['Store']]).unique(), name='Store'))
         report_df = all_stores.merge(today_agg, on='Store', how='left') \
@@ -273,9 +273,9 @@ with tab1:
                               .merge(rbm_bdm_df[['Store', 'RBM', 'BDM']], on='Store', how='left')
 
         report_df[['FTD Count', 'FTD Amount', 'MTD Count', 'MTD Amount']] = report_df[['FTD Count', 'FTD Amount', 'MTD Count', 'MTD Amount']].fillna(0).astype(int)
-        report_df['PRV MTD'] = report_df['PRV MTD'].fillna(0).astype(int)
+        report_df['PREV MONTH SALE'] = report_df['PREV MONTH SALE'].fillna(0).astype(int)
         report_df['DIFF %'] = report_df.apply(
-            lambda x: round(((x['MTD Amount'] - x['PRV MTD']) / x['PRV MTD']) * 100, 2) if x['PRV MTD'] != 0 else 0,
+            lambda x: round(((x['MTD Amount'] - x['PREV MONTH SALE']) / x['PREV MONTH SALE']) * 100, 2) if x['PREV MONTH SALE'] != 0 else 0,
             axis=1
         )
 
@@ -528,7 +528,7 @@ with tab1:
                     best_performer = rbm_data.iloc[0]
                     rbm_ws.merge_range(4, 0, 4, 7, f"🥇 Best Performer: {best_performer['Store']} - ₹{int(best_performer['MTD Amount']):,}", formats['rbm_performance'])
 
-                headers = ['Store Name', 'FTD Count', 'FTD Amount', 'MTD Count', 'MTD Amount', 'PRV MTD', 'DIFF %', 'ASP']
+                headers = ['Store Name', 'FTD Count', 'FTD Amount', 'MTD Count', 'MTD Amount', 'PREV MONTH SALE', 'DIFF %', 'ASP']
                 for col, header in enumerate(headers):
                     rbm_ws.write(6, col, header, formats['rbm_header'])
 
@@ -553,7 +553,7 @@ with tab1:
                         rbm_ws.write(row_idx, 3, mtd_count, formats['rbm_positive'])
 
                     rbm_ws.write(row_idx, 4, int(row['MTD Amount']), data_format)
-                    rbm_ws.write(row_idx, 5, int(row['PRV MTD']), data_format)
+                    rbm_ws.write(row_idx, 5, int(row['PREV MONTH SALE']), data_format)
 
                     diff_pct = row['DIFF %']
                     if diff_pct > 0:
@@ -572,9 +572,9 @@ with tab1:
                 rbm_ws.write(total_row, 2, rbm_data['FTD Amount'].sum(), formats['rbm_total'])
                 rbm_ws.write(total_row, 3, rbm_data['MTD Count'].sum(), formats['rbm_total'])
                 rbm_ws.write(total_row, 4, rbm_data['MTD Amount'].sum(), formats['rbm_total'])
-                rbm_ws.write(total_row, 5, rbm_data['PRV MTD'].sum(), formats['rbm_total'])
+                rbm_ws.write(total_row, 5, rbm_data['PREV MONTH SALE'].sum(), formats['rbm_total'])
 
-                total_prev = rbm_data['PRV MTD'].sum()
+                total_prev = rbm_data['PREV MONTH SALE'].sum()
                 total_curr = rbm_data['MTD Amount'].sum()
                 overall_growth = round(((total_curr - total_prev) / total_prev) * 100, 2) if total_prev != 0 else 0
 
@@ -741,7 +741,7 @@ with tab2:
     book2_file = st.file_uploader("Upload Daily Sales Report", type=["xlsx"], key="r2_book1")
 
     # Load Future Store List
-    future_df = pd.read_excel("Future Store List.xlsx")
+    future_df = pd.read_excel("/workspaces/osg2-dashboard/Future Store List.xlsx")
     st.success("✅ Loaded default Future Store List.")
 
     if book2_file:
