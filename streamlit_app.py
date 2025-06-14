@@ -230,7 +230,7 @@ with tab1:
     book1_file = st.file_uploader("Upload current month sales data", type=["xlsx"], key="curr_sales")
     prev_month_file = st.file_uploader("Upload previous month sales data", type=["xlsx"], key="prev_sales")
 
-    store_list_file = "Myg All Store.xlsx"
+    store_list_file = "myG All Store.xlsx"
     rbm_bdm_file = "RBM,BDM,BRANCH.xlsx"
 
     try:
