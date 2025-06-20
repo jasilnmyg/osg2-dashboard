@@ -936,11 +936,8 @@ with tab3:
 
                 mapped_keywords = []
                 for sku_key, keywords in sku_category_mapping.items():
-                    for keyword in keywords:
-                        if keyword.lower() in retailer_sku.lower():
-                            mapped_keywords = [kw.lower() for kw in keywords]
-                            break
-                    if mapped_keywords:
+                    if sku_key in retailer_sku:
+                        mapped_keywords = [kw.lower() for kw in keywords]
                         break
 
                 filtered = user_products[user_products['Category'].str.lower().isin(mapped_keywords)]
