@@ -873,7 +873,7 @@ with tab3:
     if osg_file and product_file:
         with st.spinner('Mapping data...'):
             osg_df = pd.read_excel(osg_file)
-            product_df = pd.read_excel(product_file)
+            product_df = pd.read_excel(product_file, converters={'IMEI': str})
 
             # SKU Mapping
             sku_category_mapping = {
