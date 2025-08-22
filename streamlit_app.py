@@ -23,13 +23,11 @@ def init_database():
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
 
-        # Stores: now supports only Store name; ID is auto-generated
+        # Stores: only store name; ID is auto-generated
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS stores (
                 store_id TEXT PRIMARY KEY,
                 store_name TEXT NOT NULL,
-                location TEXT DEFAULT '',
-                district TEXT DEFAULT '',
                 created_date DATE DEFAULT CURRENT_DATE
             )
         ''')
@@ -154,14 +152,14 @@ PRODUCTS_BY_CATEGORY = {
 def get_db_connection():
     return sqlite3.connect(DB_PATH)
 
-def add_store(store_id, store_name, location, district):
+def add_store(store_id, store_name):
     with get_db_connection() as conn:
         try:
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT OR REPLACE INTO stores (store_id, store_name, location, district)
-                VALUES (?, ?, ?, ?)
-            ''', (store_id, store_name, location, district))
+                INSERT OR REPLACE INTO stores (store_id, store_name)
+                VALUES (?, ?)
+            ''', (store_id, store_name))
             conn.commit()
             return True
         except Exception as e:
@@ -216,7 +214,7 @@ def import_stores_from_excel(excel_file):
                 errors.append(f"Skipped row due to missing data: {row.to_dict()}")
                 continue
             store_id = generate_store_id_from_name(store_name)
-            if add_store(store_id, store_name, '', ''):
+            if add_store(store_id, store_name):
                 imported += 1
             else:
                 errors.append(f"Failed to add store {store_id} - {store_name}")
@@ -244,7 +242,7 @@ def add_daily_sales(date, store_id, category, product_name, sales_amount, units_
 def get_sales_data(store_id=None, start_date=None, end_date=None, category=None, product_name=None):
     with get_db_connection() as conn:
         query = '''
-            SELECT ds.*, s.store_name, s.location, s.district
+            SELECT ds.*, s.store_name
             FROM daily_sales ds
             JOIN stores s ON ds.store_id = s.store_id
             WHERE 1=1
@@ -353,7 +351,7 @@ def store_management_page():
                 if store_name:
                     # Generate a unique internal store_id from the name
                     store_id = generate_store_id_from_name(store_name)
-                    if add_store(store_id, store_name, '', ''):
+                    if add_store(store_id, store_name):
                         st.success("Store added successfully!")
                     else:
                         st.error("Error adding store")
@@ -391,7 +389,7 @@ def store_management_page():
 
     st.subheader("Existing Stores")
     if not stores_df.empty:
-        st.dataframe(stores_df, use_container_width=True)
+        st.dataframe(stores_df[['store_id', 'store_name', 'created_date']], use_container_width=True)
     else:
         st.info("No stores added yet")
 
@@ -583,10 +581,7 @@ def sales_analysis_page():
                     fig.update_xaxis(tickangle=45)
                     st.plotly_chart(fig, use_container_width=True)
                 with c4:
-                    district_sales = sales_data.groupby('district')['sales_amount'].sum().reset_index()
-                    fig = px.pie(district_sales, values='sales_amount', names='district',
-                                 title='District-wise Sales Distribution')
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.info("District-wise analysis not available as district data is not collected.")
 
             st.subheader("Detailed Sales Data")
             st.dataframe(sales_data, use_container_width=True)
@@ -742,7 +737,6 @@ def campaign_performance_page():
             st.write(f"**Name:** {campaign_info['campaign_name']}")
             st.write(f"**Type:** {campaign_info['campaign_type'].replace('_', ' ').title()}")
             st.write(f"**Duration:** {campaign_info['start_date']} to {campaign_info['end_date']}")
-            st.write(f"**Discount:** {campaign_info.get('discount_percent', '')}%")
             st.write(f"**Categories:** {campaign_info.get('categories', '[]')}")
             
             # Skeleton for performance analysis (demo)
@@ -885,11 +879,11 @@ def daily_sales_page():
     
     with col2:
         st.subheader("Bulk Upload")
-        st.info("CSV format: date, store_id, category, product_name, sales_amount, units_sold")
-        uploaded_file = st.file_uploader("Upload CSV file", type="csv")
+        st.info("Excel format: date, store_id, category, product_name, sales_amount, units_sold")
+        uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx", "xls"])
         if uploaded_file is not None:
             try:
-                df = pd.read_csv(uploaded_file)
+                df = pd.read_excel(uploaded_file)
                 required_cols = ['date', 'store_id', 'category', 'product_name', 'sales_amount']
                 if all(col in df.columns for col in required_cols):
                     st.write("Preview:")
@@ -898,7 +892,7 @@ def daily_sales_page():
                         df.to_sql('daily_sales', get_db_connection(), if_exists='append', index=False)
                         st.success(f"Imported {len(df)} records successfully!")
                 else:
-                    st.error(f"CSV must contain columns: {required_cols}")
+                    st.error(f"Excel must contain columns: {required_cols}")
             except Exception as e:
                 st.error(f"Error reading file: {e}")
     
@@ -906,7 +900,7 @@ def daily_sales_page():
     st.subheader("Recent Sales Data")
     recent_sales = get_sales_data()
     if not recent_sales.empty:
-        display_cols = ['date', 'store_name', 'category', 'product_name', 'sales_amount', 'units_sold', 'location']
+        display_cols = ['date', 'store_name', 'category', 'product_name', 'sales_amount', 'units_sold']
         st.dataframe(recent_sales[display_cols].head(20), use_container_width=True)
     else:
         st.info("No sales data available")
