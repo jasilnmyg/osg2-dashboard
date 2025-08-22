@@ -5,12 +5,13 @@ import plotly.express as px
 import sqlite3
 import pickle
 from datetime import datetime, timedelta
+import re
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
-
 import warnings
+
 warnings.filterwarnings('ignore')
 
 # -------------------------------
@@ -19,72 +20,96 @@ warnings.filterwarnings('ignore')
 DB_PATH = 'sales_campaign_data.db'
 
 def init_database():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
 
-    # Stores: allow empty defaults for manual Excel import
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS stores (
-            store_id TEXT PRIMARY KEY,
-            store_name TEXT NOT NULL,
-            location TEXT DEFAULT '',
-            district TEXT DEFAULT '',
-            created_date DATE DEFAULT CURRENT_DATE
-        )
-    ''')
-    # Daily sales data
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS daily_sales (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date DATE NOT NULL,
-            store_id TEXT NOT NULL,
-            category TEXT NOT NULL,
-            product_name TEXT NOT NULL,
-            sales_amount REAL NOT NULL,
-            units_sold INTEGER DEFAULT 0,
-            FOREIGN KEY (store_id) REFERENCES stores (store_id)
-        )
-    ''')
-    # Campaigns table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS campaigns (
-            campaign_id TEXT PRIMARY KEY,
-            campaign_name TEXT NOT NULL,
-            start_date DATE NOT NULL,
-            end_date DATE NOT NULL,
-            campaign_type TEXT NOT NULL, -- 'selected_stores' or 'all_kerala'
-            target_stores TEXT, -- JSON array of store IDs
-            offer_products TEXT NOT NULL, -- JSON array of product names
-            offer_description TEXT,
-            created_date DATE DEFAULT CURRENT_DATE
-        )
-    ''')
-    # Campaign performance tracking
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS campaign_performance (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            campaign_id TEXT NOT NULL,
-            store_id TEXT NOT NULL,
-            product_name TEXT NOT NULL,
-            category TEXT NOT NULL,
-            sales_before REAL, -- 7 days before campaign
-            sales_during REAL, -- during campaign
-            sales_after REAL,  -- 7 days after campaign
-            units_before INTEGER,
-            units_during INTEGER,
-            units_after INTEGER,
-            uplift_percent REAL,
-            units_uplift_percent REAL,
-            FOREIGN KEY (campaign_id) REFERENCES campaigns (campaign_id),
-            FOREIGN KEY (store_id) REFERENCES stores (store_id)
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
+        # Stores: now supports only Store name; ID is auto-generated
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS stores (
+                store_id TEXT PRIMARY KEY,
+                store_name TEXT NOT NULL,
+                location TEXT DEFAULT '',
+                district TEXT DEFAULT '',
+                created_date DATE DEFAULT CURRENT_DATE
+            )
+        ''')
+        # Daily sales data
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS daily_sales (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date DATE NOT NULL,
+                store_id TEXT NOT NULL,
+                category TEXT NOT NULL,
+                product_name TEXT NOT NULL,
+                sales_amount REAL NOT NULL,
+                units_sold INTEGER DEFAULT 0,
+                FOREIGN KEY (store_id) REFERENCES stores (store_id)
+            )
+        ''')
+        # Campaigns table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS campaigns (
+                campaign_id TEXT PRIMARY KEY,
+                campaign_name TEXT NOT NULL,
+                start_date DATE NOT NULL,
+                end_date DATE NOT NULL,
+                campaign_type TEXT NOT NULL, -- 'selected_stores' or 'all_kerala'
+                target_stores TEXT, -- JSON array of store IDs
+                offer_products TEXT NOT NULL, -- JSON array of product names
+                offer_description TEXT,
+                created_date DATE DEFAULT CURRENT_DATE
+            )
+        ''')
+        # Campaign performance tracking
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS campaign_performance (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                product_name TEXT NOT NULL,
+                category TEXT NOT NULL,
+                sales_before REAL, -- 7 days before campaign
+                sales_during REAL, -- during campaign
+                sales_after REAL,  -- 7 days after campaign
+                units_before INTEGER,
+                units_during INTEGER,
+                units_after INTEGER,
+                uplift_percent REAL,
+                units_uplift_percent REAL,
+                FOREIGN KEY (campaign_id) REFERENCES campaigns (campaign_id),
+                FOREIGN KEY (store_id) REFERENCES stores (store_id)
+            )
+        ''')
+    # end with
 
-# Initialize database
 init_database()
+
+# -------------------------------
+# Helpers: ID generation
+# -------------------------------
+
+def slugify(text: str) -> str:
+    s = str(text).strip().lower()
+    s = re.sub(r'[^a-z0-9]+', '-', s)
+    s = s.strip('-')
+    return s
+
+def store_id_exists(store_id: str) -> bool:
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.cursor()
+        cur.execute('SELECT 1 FROM stores WHERE store_id = ?', (store_id,))
+        return cur.fetchone() is not None
+
+def generate_store_id_from_name(name: str) -> str:
+    base = slugify(name)
+    if not base:
+        base = 'store'
+    store_id = base
+    i = 1
+    while store_id_exists(store_id):
+        i += 1
+        store_id = f"{base}-{i}"
+    return store_id
 
 # -------------------------------
 # App Config & Constants
@@ -124,54 +149,48 @@ PRODUCTS_BY_CATEGORY = {
 }
 
 # -------------------------------
-# Helpers
+# Helpers (DB access)
 # -------------------------------
 def get_db_connection():
     return sqlite3.connect(DB_PATH)
 
 def add_store(store_id, store_name, location, district):
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT OR REPLACE INTO stores (store_id, store_name, location, district)
-            VALUES (?, ?, ?, ?)
-        ''', (store_id, store_name, location, district))
-        conn.commit()
-        return True
-    except Exception as e:
-        st.error(f"Error adding store: {e}")
-        return False
-    finally:
-        conn.close()
+    with get_db_connection() as conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO stores (store_id, store_name, location, district)
+                VALUES (?, ?, ?, ?)
+            ''', (store_id, store_name, location, district))
+            conn.commit()
+            return True
+        except Exception as e:
+            st.error(f"Error adding store: {e}")
+            return False
 
 def delete_store(store_id):
     """
     Permanently remove a store and its related sales data.
     """
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM daily_sales WHERE store_id = ?', (store_id,))
-        cursor.execute('DELETE FROM stores WHERE store_id = ?', (store_id,))
-        conn.commit()
-        return True
-    except Exception as e:
-        st.error(f"Error deleting store: {e}")
-        return False
-    finally:
-        conn.close()
+    with get_db_connection() as conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM daily_sales WHERE store_id = ?', (store_id,))
+            cursor.execute('DELETE FROM stores WHERE store_id = ?', (store_id,))
+            conn.commit()
+            return True
+        except Exception as e:
+            st.error(f"Error deleting store: {e}")
+            return False
 
 def get_all_stores():
-    conn = get_db_connection()
-    df = pd.read_sql_query('SELECT * FROM stores ORDER BY store_name', conn)
-    conn.close()
+    with get_db_connection() as conn:
+        df = pd.read_sql_query('SELECT * FROM stores ORDER BY store_name', conn)
     return df
 
 def import_stores_from_excel(excel_file):
     """
-    Expects Excel with two columns: 'Store' (Store Name) and 'Store Code' (Store ID).
-    Case-insensitive for column names.
+    Expects Excel with a single column: 'Store' (Store Name). Columns are case-insensitive.
     """
     try:
         df = pd.read_excel(excel_file)
@@ -179,27 +198,24 @@ def import_stores_from_excel(excel_file):
             return 0, ["Excel file is empty."]
         df_cols = [str(c).strip() for c in df.columns]
 
-        # helper to locate column by friendly name
-        def find_col_by_names(names):
-            for i, col in enumerate(df_cols):
-                if col.lower() in [n.lower() for n in names]:
-                    return i
-            return None
+        # find index for the 'Store' column
+        store_name_idx = None
+        for i, col in enumerate(df_cols):
+            if col.lower() in ['store', 'store name', 'store_name']:
+                store_name_idx = i
+                break
 
-        store_name_idx = find_col_by_names(['Store', 'Store Name', 'Store_Name'])
-        store_id_idx = find_col_by_names(['Store Code', 'Store_code', 'Store_ID', 'StoreID', 'Store'])
-
-        if store_name_idx is None or store_id_idx is None:
-            return 0, ["Excel must contain columns named 'Store' and 'Store Code' (case-insensitive)."]
+        if store_name_idx is None:
+            return 0, ["Excel must contain a column named 'Store' (case-insensitive)."]
 
         imported = 0
         errors = []
         for _, row in df.iterrows():
             store_name = "" if pd.isna(row.iloc[store_name_idx]) else str(row.iloc[store_name_idx]).strip()
-            store_id   = "" if pd.isna(row.iloc[store_id_idx]) else str(row.iloc[store_id_idx]).strip()
-            if not store_name or not store_id:
+            if not store_name:
                 errors.append(f"Skipped row due to missing data: {row.to_dict()}")
                 continue
+            store_id = generate_store_id_from_name(store_name)
             if add_store(store_id, store_name, '', ''):
                 imported += 1
             else:
@@ -208,71 +224,67 @@ def import_stores_from_excel(excel_file):
     except Exception as e:
         return 0, [f"Error reading Excel: {e}"]
 
-# Sales data management
+# -------------------------------
+# Core: Sales & ML helpers
+# -------------------------------
 def add_daily_sales(date, store_id, category, product_name, sales_amount, units_sold):
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO daily_sales (date, store_id, category, product_name, sales_amount, units_sold)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (date, store_id, category, product_name, sales_amount, units_sold))
-        conn.commit()
-        return True
-    except Exception as e:
-        st.error(f"Error adding sales data: {e}")
-        return False
-    finally:
-        conn.close()
+    with get_db_connection() as conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO daily_sales (date, store_id, category, product_name, sales_amount, units_sold)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (date, store_id, category, product_name, sales_amount, units_sold))
+            conn.commit()
+            return True
+        except Exception as e:
+            st.error(f"Error adding sales data: {e}")
+            return False
 
 def get_sales_data(store_id=None, start_date=None, end_date=None, category=None, product_name=None):
-    conn = get_db_connection()
-    query = '''
-        SELECT ds.*, s.store_name, s.location, s.district
-        FROM daily_sales ds
-        JOIN stores s ON ds.store_id = s.store_id
-        WHERE 1=1
-    '''
-    params = []
-    
-    if store_id:
-        if isinstance(store_id, list):
-            placeholders = ','.join(['?' for _ in store_id])
-            query += f' AND ds.store_id IN ({placeholders})'
-            params.extend(store_id)
-        else:
-            query += ' AND ds.store_id = ?'
-            params.append(store_id)
-    if start_date:
-        query += ' AND ds.date >= ?'
-        params.append(start_date)
-    if end_date:
-        query += ' AND ds.date <= ?'
-        params.append(end_date)
-    if category:
-        query += ' AND ds.category = ?'
-        params.append(category)
-    if product_name:
-        if isinstance(product_name, list):
-            placeholders = ','.join(['?' for _ in product_name])
-            query += f' AND ds.product_name IN ({placeholders})'
-            params.extend(product_name)
-        else:
-            query += ' AND ds.product_name = ?'
-            params.append(product_name)
-    
-    query += ' ORDER BY ds.date DESC'
-    
-    df = pd.read_sql_query(query, conn, params=params)
-    conn.close()
+    with get_db_connection() as conn:
+        query = '''
+            SELECT ds.*, s.store_name, s.location, s.district
+            FROM daily_sales ds
+            JOIN stores s ON ds.store_id = s.store_id
+            WHERE 1=1
+        '''
+        params = []
+        if store_id:
+            if isinstance(store_id, list):
+                placeholders = ','.join(['?' for _ in store_id])
+                query += f' AND ds.store_id IN ({placeholders})'
+                params.extend(store_id)
+            else:
+                query += ' AND ds.store_id = ?'
+                params.append(store_id)
+        if start_date:
+            query += ' AND ds.date >= ?'
+            params.append(start_date)
+        if end_date:
+            query += ' AND ds.date <= ?'
+            params.append(end_date)
+        if category:
+            query += ' AND ds.category = ?'
+            params.append(category)
+        if product_name:
+            if isinstance(product_name, list):
+                placeholders = ','.join(['?' for _ in product_name])
+                query += f' AND ds.product_name IN ({placeholders})'
+                params.extend(product_name)
+            else:
+                query += ' AND ds.product_name = ?'
+                params.append(product_name)
+        query += ' ORDER BY ds.date DESC'
+        df = pd.read_sql_query(query, conn, params=params)
     return df
 
 def create_prediction_model(data):
     """Create and train ML model for sales prediction"""
-    if len(data) < 30:  # Need minimum data for training
+    if len(data) < 30:
         return None, None, "Insufficient data for training (minimum 30 records required)"
     
-    # Feature engineering
+    # Prepare features
     data = data.copy()
     data['date'] = pd.to_datetime(data['date'])
     data['day_of_week'] = data['date'].dt.dayofweek
@@ -280,38 +292,30 @@ def create_prediction_model(data):
     data['day_of_month'] = data['date'].dt.day
     data['is_weekend'] = (data['day_of_week'] >= 5).astype(int)
     
-    # Create lagged features
     data = data.sort_values(['store_id', 'category', 'date'])
     data['sales_lag_1'] = data.groupby(['store_id', 'category'])['sales_amount'].shift(1)
     data['sales_lag_7'] = data.groupby(['store_id', 'category'])['sales_amount'].shift(7)
     data['sales_rolling_7'] = data.groupby(['store_id', 'category'])['sales_amount'].rolling(7).mean().reset_index(0, drop=True)
     
-    # Encode categorical variables
     data_encoded = pd.get_dummies(data, columns=['store_id', 'category'], prefix=['store', 'cat'])
     
-    # Select features
     feature_cols = [col for col in data_encoded.columns if col.startswith(('store_', 'cat_')) or 
                     col in ['day_of_week', 'month', 'day_of_month', 'is_weekend', 
                            'sales_lag_1', 'sales_lag_7', 'sales_rolling_7']]
     
-    # Remove rows with NaN values
     data_clean = data_encoded.dropna()
-    
     if len(data_clean) < 20:
         return None, None, "Insufficient clean data for training"
     
     X = data_clean[feature_cols]
     y = data_clean['sales_amount']
     
-    # Split data
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
-    # Scale features
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
-    # Train models
     models = {
         'Random Forest': RandomForestRegressor(n_estimators=100, random_state=42),
         'Linear Regression': LinearRegression()
@@ -335,30 +339,30 @@ def create_prediction_model(data):
 # UI: Pages
 # -------------------------------
 
-# Store Management Page (with Excel import + manual entry: only Store, Store Code)
+# Store Management Page (Excel import + manual entry: only Store)
 def store_management_page():
     st.header("🏪 Store Management")
 
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        st.subheader("Add New Store (Store, Store Code)")
+        st.subheader("Add New Store")
         with st.form("add_store_form"):
             store_name = st.text_input("Store", placeholder="e.g., Balussery MYG Store")
-            store_code = st.text_input("Store Code", placeholder="e.g., balussery-myg")
-            # We intentionally keep manual entry minimal: only Store & Store Code
             if st.form_submit_button("Add Store"):
-                if store_code and store_name:
-                    if add_store(store_code, store_name, '', ''):
+                if store_name:
+                    # Generate a unique internal store_id from the name
+                    store_id = generate_store_id_from_name(store_name)
+                    if add_store(store_id, store_name, '', ''):
                         st.success("Store added successfully!")
                     else:
                         st.error("Error adding store")
                 else:
-                    st.error("Please fill both fields: Store and Store Code")
+                    st.error("Please fill the Store field")
 
     with col2:
         st.subheader("Import Stores from Excel")
-        uploaded_file = st.file_uploader("Upload Excel (two columns: Store, Store Code)", type=["xlsx", "xls"])
+        uploaded_file = st.file_uploader("Upload Excel (column: Store)", type=["xlsx", "xls"])
         if uploaded_file is not None:
             count, errors = import_stores_from_excel(uploaded_file)
             st.success(f"Imported {count} stores from Excel")
@@ -366,20 +370,24 @@ def store_management_page():
                 for err in errors[:5]:
                     st.warning(err)
 
-    # Remove a Store (remove the one you added)
+    # Remove a Store
     st.subheader("Remove a Store")
     stores_df = get_all_stores()
     if stores_df.empty:
         st.info("No stores available to remove")
     else:
-        display_list = [f"{row['store_id']} - {row['store_name']}" for idx, row in stores_df.iterrows()]
-        delete_display = st.selectbox("Select Store to Remove", display_list)
+        selected_store = st.selectbox("Select Store to Remove", stores_df['store_name'].tolist())
         if st.button("Delete Selected Store"):
-            store_id_to_delete = delete_display.split(' - ')[0]
-            if delete_store(store_id_to_delete):
-                st.success("Store removed successfully!")
+            # Map to first matching store_id (assumes unique store names for safety)
+            matches = stores_df[stores_df['store_name'] == selected_store]
+            if not matches.empty:
+                store_id_to_delete = matches['store_id'].iloc[0]
+                if delete_store(store_id_to_delete):
+                    st.success("Store removed successfully!")
+                else:
+                    st.error("Failed to remove store.")
             else:
-                st.error("Failed to remove store.")
+                st.error("Selected store not found.")
 
     st.subheader("Existing Stores")
     if not stores_df.empty:
@@ -464,31 +472,29 @@ def campaign_management_page():
             if st.form_submit_button("Create Campaign"):
                 if campaign_id and campaign_name and target_stores and selected_products:
                     product_names = [prod[0] for prod in selected_products]
-                    conn = get_db_connection()
-                    try:
-                        cursor = conn.cursor()
-                        cursor.execute('''
-                            INSERT INTO campaigns
-                            (campaign_id, campaign_name, start_date, end_date, campaign_type,
-                             target_stores, offer_products, offer_description)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        ''', (campaign_id, campaign_name, start_date, end_date, campaign_type,
-                              str(target_stores), str(product_names), offer_description))
-                        conn.commit()
-                        st.success("Campaign created successfully!")
-                    except Exception as e:
-                        st.error(f"Error creating campaign: {e}")
-                    finally:
-                        conn.close()
+                    with get_db_connection() as conn:
+                        try:
+                            cursor = conn.cursor()
+                            cursor.execute('''
+                                INSERT INTO campaigns
+                                (campaign_id, campaign_name, start_date, end_date, campaign_type,
+                                 target_stores, offer_products, offer_description)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            ''', (campaign_id, campaign_name, start_date, end_date, campaign_type,
+                                  str(target_stores), str(product_names), offer_description))
+                            conn.commit()
+                            st.success("Campaign created successfully!")
+                        except Exception as e:
+                            st.error(f"Error creating campaign: {e}")
+                        finally:
+                            conn.close()
                 else:
                     st.error("Please fill all required fields and select at least one product")
 
     with col2:
         st.subheader("Campaign Analytics")
-        conn = get_db_connection()
-        campaigns_df = pd.read_sql_query('SELECT * FROM campaigns ORDER BY created_date DESC', conn)
-        conn.close()
-
+        with get_db_connection() as conn:
+            campaigns_df = pd.read_sql_query('SELECT * FROM campaigns ORDER BY created_date DESC', conn)
         if not campaigns_df.empty:
             st.metric("Total Campaigns", len(campaigns_df))
             active_campaigns = campaigns_df[
@@ -518,16 +524,16 @@ def sales_analysis_page():
         else:
             selected_store = None
             st.warning("No stores available")
-
+    
     with col2:
         selected_category = st.selectbox("Select Category", ["All"] + ITEM_CATEGORIES)
-
+    
     with col3:
         start_date = st.date_input("Start Date", value=datetime.now().date() - timedelta(days=30))
-
+    
     with col4:
         end_date = st.date_input("End Date", value=datetime.now().date())
-
+    
     if selected_store:
         store_filter = None if selected_store == "All" else selected_store
         category_filter = None if selected_category == "All" else selected_category
@@ -535,7 +541,6 @@ def sales_analysis_page():
         sales_data = get_sales_data(store_filter, start_date, end_date, category_filter)
         
         if not sales_data.empty:
-            # Summary metrics
             colA, colB, colC, colD = st.columns(4)
             with colA:
                 total_sales = sales_data['sales_amount'].sum()
@@ -551,7 +556,6 @@ def sales_analysis_page():
                 unique_categories = sales_data['category'].nunique()
                 st.metric("Categories Sold", unique_categories)
 
-            # Visualizations
             c1, c2 = st.columns(2)
             with c1:
                 daily_sales = sales_data.groupby('date')['sales_amount'].sum().reset_index()
@@ -677,11 +681,10 @@ def ai_predictions_page():
                     else:
                         features.update({'sales_lag_1': 0, 'sales_lag_7': 0, 'sales_rolling_7': 0})
 
-                    # Build a simple feature vector; here we mimic the training features
+                    # Build a simple feature vector
                     vec = []
                     for col in sorted(list(set(features.keys()) | {'day_of_week', 'month', 'day_of_month', 'is_weekend', 'campaign_active', 'discount_percent', 'sales_lag_1', 'sales_lag_7', 'sales_rolling_7'})):
-                        val = features.get(col, 0)
-                        vec.append(val)
+                        vec.append(features.get(col, 0))
 
                     # Normalize using scaler if possible
                     try:
@@ -689,7 +692,6 @@ def ai_predictions_page():
                     except Exception:
                         vec_scaled = [np.array(vec)]
 
-                    # Placeholder: Simple baseline if model expects proper features
                     try:
                         predicted = model.predict(vec_scaled)[0]
                     except Exception:
@@ -721,16 +723,13 @@ def ai_predictions_page():
 def campaign_performance_page():
     st.header("📋 Campaign Performance Analysis")
     
-    # Get campaigns
-    conn = get_db_connection()
-    campaigns_df = pd.read_sql_query('SELECT * FROM campaigns ORDER BY start_date DESC', conn)
-    conn.close()
-    
+    with get_db_connection() as conn:
+        campaigns_df = pd.read_sql_query('SELECT * FROM campaigns ORDER BY start_date DESC', conn)
+
     if campaigns_df.empty:
         st.info("No campaigns available")
         return
     
-    # Select campaign for analysis
     selected_campaign = st.selectbox("Select Campaign", campaigns_df['campaign_id'].tolist())
     
     if selected_campaign:
@@ -748,48 +747,27 @@ def campaign_performance_page():
             
             # Skeleton for performance analysis (demo)
             if st.button("Analyze Campaign Performance"):
-                target_stores = eval(campaign_info.get('target_stores', '[]'))
-                categories = eval(campaign_info.get('categories', '[]'))
-                
-                perf_df = pd.DataFrame(columns=[
-                    'campaign_id','store_id','category','sales_before','sales_during','sales_after',
-                    'uplift_percent','units_before','units_during','units_after'
-                ])
-                # Simple placeholder: you can replace with real calculations
-                for store_id in target_stores:
-                    for category in categories:
-                        perf_df = perf_df.append({
-                            'campaign_id': selected_campaign,
-                            'store_id': store_id,
-                            'category': category,
-                            'sales_before': 0,
-                            'sales_during': 0,
-                            'sales_after': 0,
-                            'uplift_percent': 0.0,
-                            'units_before': 0,
-                            'units_during': 0,
-                            'units_after': 0
-                        }, ignore_index=True)
-                if not perf_df.empty:
-                    st.dataframe(perf_df, use_container_width=True)
-                else:
-                    st.info("No performance data yet.")
-        
+                # Simple per-campaign performance: For demonstration, we compute uplift per store-category from campaign_performance
+                perf_df = pd.read_sql_query('''
+                    SELECT * FROM campaign_performance WHERE campaign_id = ?
+                ''', get_db_connection(), params=[selected_campaign])
+
+                st.write("Performance data (sample)")
+                st.dataframe(perf_df, use_container_width=True)
+
         with col2:
             st.subheader("Quick Stats")
-            perf_df = pd.read_sql_query('SELECT * FROM campaign_performance WHERE campaign_id = ?', get_db_connection(), params=[selected_campaign])
+            perf_df = pd.read_sql_query('''
+                SELECT * FROM campaign_performance WHERE campaign_id = ?
+            ''', get_db_connection(), params=[selected_campaign])
             if not perf_df.empty:
                 total_uplift = perf_df['uplift_percent'].mean()
-                total_roi = perf_df.get('roi', pd.Series([0]*len(perf_df))).mean() if 'roi' in perf_df.columns else 0
-                best_category = perf_df.loc[perf_df['uplift_percent'].idxmax(), 'category']
-                
+                best_category = perf_df.loc[perf_df['uplift_percent'].idxmax(), 'category'] if not perf_df['uplift_percent'].empty else ''
                 st.metric("Average Uplift", f"{total_uplift:.1f}%")
-                st.metric("Average ROI", f"{total_roi:.2f}x" if total_roi else "0.00x")
                 st.metric("Best Category", best_category)
             else:
                 st.info("No performance data yet.")
         
-        # Detailed performance table (merge with store names for readability)
         perf_df = perf_df if 'perf_df' in locals() else pd.DataFrame()
         if not perf_df.empty:
             stores_df = get_all_stores()
@@ -917,20 +895,17 @@ def daily_sales_page():
                     st.write("Preview:")
                     st.dataframe(df.head())
                     if st.button("Import Data"):
-                        conn = get_db_connection()
-                        df.to_sql('daily_sales', conn, if_exists='append', index=False)
-                        conn.close()
+                        df.to_sql('daily_sales', get_db_connection(), if_exists='append', index=False)
                         st.success(f"Imported {len(df)} records successfully!")
                 else:
                     st.error(f"CSV must contain columns: {required_cols}")
             except Exception as e:
                 st.error(f"Error reading file: {e}")
     
-    # Recent sales data with product information
+    # Recent sales data
     st.subheader("Recent Sales Data")
     recent_sales = get_sales_data()
     if not recent_sales.empty:
-        # Display columns in better order
         display_cols = ['date', 'store_name', 'category', 'product_name', 'sales_amount', 'units_sold', 'location']
         st.dataframe(recent_sales[display_cols].head(20), use_container_width=True)
     else:
