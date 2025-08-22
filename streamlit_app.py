@@ -118,21 +118,25 @@ ITEM_CATEGORIES = [
     'CONSUMER ELECTRONICS', 'OTHERS', 'ACCESSORIES', 'DIGITAL ELECTRONICS'
 ]
 
-# Products by category from the uploaded file
+# Products by category from the uploaded file, including GLASSWARE and other missing products
 PRODUCTS_BY_CATEGORY = {
     'CONSUMER ELECTRONICS': [
         'CHOPPER', 'REFRIGERATOR-FF', 'REFRIGERATOR-SBS', 'REFRIGERATOR-SD',
         'MIXER GRINDER', 'WASHING MACHINE-FA', 'WASHING MACHINE-SA', 'MICROWAVE OVEN',
-        'AIR CONDITIONER', 'WATER PURIFIER', 'FAN', 'TV', 'GRINDER', 'VACUUM CLEANER'
+        'AIR CONDITIONER', 'WATER PURIFIER', 'FAN', 'TV', 'GRINDER', 'VACUUM CLEANER',
+        'GLASSWARE', 'MIXER', 'KITCHEN APPLIANCES', 'HOME APPLIANCES', 'SMALL APPLIANCES'
     ],
     'OTHERS': [
-        'CARRY BAG', 'CASH DEPOSIT', 'SERVICE', 'GIFT VOUCHER', 'REPAIRS AND MAINTENANCE'
+        'CARRY BAG', 'CASH DEPOSIT', 'SERVICE', 'GIFT VOUCHER', 'REPAIRS AND MAINTENANCE',
+        'SMART CHOICE', 'INSTALLATION', 'DEMO CHARGES'
     ],
     'ACCESSORIES': [
-        'MOBILE ACCESSORIES', 'POWER BANK', 'MEMORY CARD', 'CABLES AND CONNECTORS'
+        'MOBILE ACCESSORIES', 'POWER BANK', 'MEMORY CARD', 'CABLES AND CONNECTORS',
+        'BLUETOOTH SPEAKER', 'PARTY SPEAKER', 'HOME THEATRE', 'SOUND BAR'
     ],
     'DIGITAL ELECTRONICS': [
-        'MOBILE SMART PHONE', 'TABLET', 'SMART WATCH', 'LAPTOP', 'DESKTOP'
+        'MOBILE SMART PHONE', 'TABLET', 'SMART WATCH', 'LAPTOP', 'DESKTOP',
+        'MOBILE FEATURE PHONE'
     ]
 }
 
@@ -206,8 +210,11 @@ def import_stores_from_excel(excel_file):
 # Core: Sales & ML helpers
 # -------------------------------
 def add_daily_sales(date, store_id, category, product_name, sales_amount, units_sold):
-    if category not in ITEM_CATEGORIES:
+    if not category or category not in ITEM_CATEGORIES:
         st.error(f"Invalid category: {category}. Choose from {ITEM_CATEGORIES}")
+        return False
+    if not product_name:
+        st.error("Product name cannot be empty")
         return False
     if product_name not in PRODUCTS_BY_CATEGORY.get(category, []) and product_name != "Other (Custom)":
         st.warning(f"Product {product_name} not in predefined list for {category}. Adding as custom.")
@@ -219,9 +226,10 @@ def add_daily_sales(date, store_id, category, product_name, sales_amount, units_
                 VALUES (?, ?, ?, ?, ?, ?)
             ''', (date, store_id, category, product_name, sales_amount, units_sold))
             conn.commit()
+            st.success(f"Successfully added sales data for {product_name} in {category}")
             return True
         except Exception as e:
-            st.error(f"Error adding sales data: {e}")
+            st.error(f"Error adding sales data for {product_name}: {str(e)}")
             return False
 
 def get_sales_data(store_id=None, start_date=None, end_date=None, category=None, product_name=None):
@@ -259,8 +267,12 @@ def get_sales_data(store_id=None, start_date=None, end_date=None, category=None,
                 query += ' AND ds.product_name = ?'
                 params.append(product_name)
         query += ' ORDER BY ds.date DESC'
-        df = pd.read_sql_query(query, conn, params=params)
-    return df
+        try:
+            df = pd.read_sql_query(query, conn, params=params)
+            return df
+        except Exception as e:
+            st.error(f"Error retrieving sales data: {e}")
+            return pd.DataFrame()
 
 def create_prediction_model(data):
     if len(data) < 30:
@@ -673,7 +685,7 @@ def campaign_performance_page():
             perf_display['sales_during'] = perf_display['sales_during'].fillna(0).apply(lambda x: f"₹{x:,.2f}")
             perf_display['sales_after'] = perf_display['sales_after'].fillna(0).apply(lambda x: f"₹{x:,.2f}")
             perf_display['uplift_percent'] = perf_display['uplift_percent'].fillna(0).apply(lambda x: f"{x:.1f}%")
-            perf_display['roi'] = perf_display.get('roi', pd.Series([0]*len(perf_display))).fillna(0).apply(lambda x: f"{x:.2f}x")
+            perf_display['roi'] = perf_display.get('roi', pd.Series([0]*len(perf_df))).fillna(0).apply(lambda x: f"{x:.2f}x")
             display_cols = ['store_name', 'category', 'product_name', 'sales_before', 'sales_during', 'sales_after', 'uplift_percent', 'roi']
             st.subheader("Detailed Performance Data")
             st.dataframe(perf_display[display_cols], use_container_width=True)
@@ -725,13 +737,13 @@ def daily_sales_page():
             sales_amount = st.number_input("Sales Amount (₹)", min_value=0.0, format="%.2f")
             units_sold = st.number_input("Units Sold", min_value=0, value=1)
             if st.form_submit_button("Add Sales Data"):
-                if product_name and sales_amount > 0 and category:
+                if product_name and sales_amount >= 0 and category and store_id:
                     if add_daily_sales(date, store_id, category, product_name, sales_amount, units_sold):
-                        st.success("Sales data added successfully!")
+                        st.success(f"Sales data for {product_name} added successfully!")
                     else:
-                        st.error("Error adding sales data")
+                        st.error(f"Failed to add sales data for {product_name}")
                 else:
-                    st.error("Please fill all required fields")
+                    st.error("Please fill all required fields (Date, Store, Category, Product Name, Sales Amount)")
     with col2:
         st.subheader("Bulk Upload")
         st.info("Excel format: date, store_id, category, product_name, sales_amount, units_sold")
@@ -742,18 +754,44 @@ def daily_sales_page():
                 required_cols = ['date', 'store_id', 'category', 'product_name', 'sales_amount']
                 if all(col in df.columns for col in required_cols):
                     df['category'] = df['category'].apply(lambda x: x if x in ITEM_CATEGORIES else 'OTHERS')
-                    for _, row in df.iterrows():
-                        if row['product_name'] not in PRODUCTS_BY_CATEGORY.get(row['category'], []):
-                            st.warning(f"Product {row['product_name']} not in {row['category']} list. Adding as custom.")
-                    st.write("Preview:")
+                    df['sales_amount'] = pd.to_numeric(df['sales_amount'], errors='coerce').fillna(0)
+                    df['units_sold'] = pd.to_numeric(df['units_sold'], errors='coerce').fillna(0).astype(int)
+                    df = df[df['sales_amount'] >= 0]
+                    df = df[df['units_sold'] >= 0]
+                    non_standard_products = df[~df.apply(
+                        lambda row: row['product_name'] in PRODUCTS_BY_CATEGORY.get(row['category'], []), axis=1
+                    )][['product_name', 'category']]
+                    if not non_standard_products.empty:
+                        st.warning(f"Non-standard products detected (will be added as custom):\n{non_standard_products.drop_duplicates().to_string(index=False)}")
+                    st.write("Preview of data to be imported:")
                     st.dataframe(df.head())
                     if st.button("Import Data"):
-                        df.to_sql('daily_sales', get_db_connection(), if_exists='append', index=False)
-                        st.success(f"Imported {len(df)} records successfully!")
+                        errors = []
+                        success_count = 0
+                        for _, row in df.iterrows():
+                            if add_daily_sales(
+                                row['date'], 
+                                row['store_id'], 
+                                row['category'], 
+                                row['product_name'], 
+                                row['sales_amount'], 
+                                row['units_sold']
+                            ):
+                                success_count += 1
+                            else:
+                                errors.append(f"Failed to add: {row['product_name']} ({row['category']})")
+                        if success_count > 0:
+                            st.success(f"Imported {success_count} records successfully!")
+                        if errors:
+                            st.error(f"Failed to import {len(errors)} records:")
+                            for err in errors[:5]:
+                                st.error(err)
+                            if len(errors) > 5:
+                                st.error(f"...and {len(errors)-5} more errors")
                 else:
                     st.error(f"Excel must contain columns: {required_cols}")
             except Exception as e:
-                st.error(f"Error reading file: {e}")
+                st.error(f"Error reading or processing file: {e}")
     st.subheader("Recent Sales Data")
     recent_sales = get_sales_data()
     if not recent_sales.empty:
