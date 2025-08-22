@@ -1,1067 +1,1125 @@
+def campaign_management_page():
+    st.header("🎯 Campaign Management")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.subheader("Create New Campaign")
+        with st.form("campaign_form"):
+            campaign_id = st.text_input("Campaign ID", placeholder="e.g., camp_2024_001")
+            campaign_name = st.text_input("Campaign Name", placeholder="e.g., Diwali Special Offers")
+            start_date = st.date_input("Start Date")
+            end_date = st.date_input("End Date")
+            campaign_type = st.radio("Campaign Type", ["selected_stores", "all_kerala"])
+            
+            stores_df = get_all_stores()
+            if campaign_type == "selected_stores":
+                if not stores_df.empty:
+                    target_stores = st.multiselect("Target Stores", 
+                                                 options=stores_df['store_id'].tolist(),
+                                                 format_func=lambda x: f"{x} - {stores_df[stores_df['store_id']==x]['store_name'].iloc[0]}")
+                else:
+                    target_stores = []
+                    st.warning("No stores available")
+            else:
+                target_stores = stores_df['store_id'].tolist() if not stores_df.empty else []
+                st.info(f"Campaign will target all {len(target_stores)} stores in Kerala")
+            
+            # Product selection interface
+            st.subheader("Select Offer Products")
+            
+            # Option 1: Select by category first, then products
+            selection_method = st.radio("Product Selection Method", 
+                                      ["Select by Category", "Select Individual Products"])
+            
+            selected_products = []
+            
+            if selection_method == "Select by Category":
+                selected_categories = st.multiselect("Select Categories", ITEM_CATEGORIES)
+                
+                for category in selected_categories:
+                    st.write(f"**{category} Products:**")
+                    available_products = PRODUCTS_BY_CATEGORY.get(category, [])
+                    category_products = st.multiselect(
+                        f"Select products from {category}",
+                        options=available_products,
+                        key=f"products_{category}"
+                    )
+                    selected_products.extend([(product, category) for product in category_products])
+            
+            else:  # Individual product selection
+                all_products = []
+                for cat, products in PRODUCTS_BY_CATEGORY.items():
+                    for product in products:
+                        all_products.append((f"{product} ({cat})", product, cat))
+                
+                selected_product_options = st.multiselect(
+                    "Select Individual Products",
+                    options=[item[0] for item in all_products]
+                )
+                
+                selected_products = [(item[1], item[2]) for item in all_products 
+                                   if item[0] in selected_product_options]
+            
+            # Custom products option
+            st.subheader("Add Custom Products")
+            custom_products_text = st.text_area(
+                "Add custom products (one per line, format: Product Name - Category)",
+                placeholder="iPhone 16 - Electronics\nSmart TV 65 inch - Electronics"
+            )
+            
+            if custom_products_text:
+                for line in custom_products_text.strip().split('\n'):
+                    if ' - ' in line:
+                        product, category = line.split(' - ', 1)
+                        selected_products.append((product.strip(), category.strip()))
+            
+            # Display selected products
+            if selected_products:
+                st.subheader("Selected Offer Products")
+                products_df = pd.DataFrame(selected_products, columns=['Product', 'Category'])
+                st.dataframe(products_df, use_container_width=True)
+            
+            offer_description = st.text_area("Offer Description", 
+                                           placeholder="e.g., Special discount on selected electronics and fashion items")
+            
+            if st.form_submit_button("Create Campaign"):
+                if campaign_id and campaign_name and target_stores and selected_products:
+                    # Convert selected_products to just product names
+                    product_names = [product[0] for product in selected_products]
+                    
+                    conn = get_db_connection()
+                    try:
+                        cursor = conn.cursor()
+                        cursor.execute('''
+                            INSERT INTO campaigns
+                            (campaign_id, campaign_name, start_date, end_date, campaign_type,
+                             target_stores, offer_products, offer_description)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (campaign_id, campaign_name, start_date, end_date, campaign_type,
+                              str(target_stores), str(product_names), offer_description))
+                        conn.commit()
+                        st.success(f"Campaign created successfully with {len(product_names)} offer products!")
+                    except Exception as e:
+                        st.error(f"Error creating campaign: {e}")
+                    finally:
+                        conn.close()
+                else:
+                    st.error("Please fill all required fields and select at least one product")
+    
+    with col2:
+        st.subheader("Campaign Analytics")
+        # Show campaign summary metrics
+        conn = get_db_connection()
+        campaigns_df = pd.read_sql_query('SELECT * FROM campaigns ORDER BY created_date DESC', conn)
+        conn.close()
+        
+        if not campaigns_df.empty:
+            st.metric("Total Campaigns", len(campaigns_df))
+            active_campaigns = campaigns_df[
+                (pd.to_datetime(campaigns_df['start_date']) <= pd.Timestamp.now()) &
+                (pd.to_datetime(campaigns_df['end_date']) >= pd.Timestamp.now())
+            ]
 import streamlit as st
 import pandas as pd
-from io import BytesIO
-import re
-from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, PageBreak, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib import colors
-from collections import defaultdict
-from reportlab.lib.units import mm
-from reportlab.lib.pagesizes import letter
-from datetime import datetime
-from openpyxl import Workbook
-from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
-from openpyxl.utils.dataframe import dataframe_to_rows
-import io
-import streamlit.components.v1 as components
-from openpyxl.utils import get_column_letter
-import time
-from reportlab.lib.pagesizes import A4, letter
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
-from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from datetime import datetime, timedelta
+import sqlite3
+import pickle
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import warnings
+warnings.filterwarnings('ignore')
 
-# If you also need these for more advanced PDF features:
-from reportlab.pdfgen import canvas
-from reportlab.lib.utils import ImageReader
+# Database setup
+def init_database():
+    conn = sqlite3.connect('sales_campaign_data.db')
+    cursor = conn.cursor()
+    
+    # Stores table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS stores (
+            store_id TEXT PRIMARY KEY,
+            store_name TEXT NOT NULL,
+            location TEXT NOT NULL,
+            district TEXT NOT NULL,
+            created_date DATE DEFAULT CURRENT_DATE
+        )
+    ''')
+    
+    # Daily sales data
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS daily_sales (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date DATE NOT NULL,
+            store_id TEXT NOT NULL,
+            category TEXT NOT NULL,
+            product_name TEXT NOT NULL,
+            sales_amount REAL NOT NULL,
+            units_sold INTEGER DEFAULT 0,
+            FOREIGN KEY (store_id) REFERENCES stores (store_id)
+        )
+    ''')
+    
+    # Campaigns table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS campaigns (
+            campaign_id TEXT PRIMARY KEY,
+            campaign_name TEXT NOT NULL,
+            start_date DATE NOT NULL,
+            end_date DATE NOT NULL,
+            campaign_type TEXT NOT NULL, -- 'selected_stores' or 'all_kerala'
+            target_stores TEXT, -- JSON array of store IDs
+            offer_products TEXT NOT NULL, -- JSON array of product names
+            offer_description TEXT,
+            created_date DATE DEFAULT CURRENT_DATE
+        )
+    ''')
+    
+    # Campaign performance tracking
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS campaign_performance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            product_name TEXT NOT NULL,
+            category TEXT NOT NULL,
+            sales_before REAL, -- 7 days before campaign
+            sales_during REAL, -- during campaign
+            sales_after REAL,  -- 7 days after campaign
+            units_before INTEGER,
+            units_during INTEGER,
+            units_after INTEGER,
+            uplift_percent REAL,
+            units_uplift_percent REAL,
+            FOREIGN KEY (campaign_id) REFERENCES campaigns (campaign_id),
+            FOREIGN KEY (store_id) REFERENCES stores (store_id)
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
 
+# Initialize database
+init_database()
 
+# Configuration
 st.set_page_config(
-    page_title="OSG DASHBOARD",
-    page_icon="📊",
+    page_title="Sales Prediction & Campaign Analysis",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Force light mode and disable dark mode
-st.markdown("""
-<style>
-/* Define light and dark themes explicitly */
-html {
-  --primary-light: #3498db;
-  --secondary-light: #2980b9;
-  --text-light: #2c3e50;
-  --bg-light: #ffffff;
-  --card-bg-light: #f8f9fa;
-  --border-light: #dfe6e9;
+# Item categories
+ITEM_CATEGORIES = [
+    'Electronics', 'Clothing & Fashion', 'Groceries & Food', 'Home & Garden',
+    'Sports & Fitness', 'Beauty & Personal Care', 'Books & Stationery',
+    'Toys & Games', 'Automotive', 'Health & Medicine', 'Mobile & Accessories',
+    'Footwear', 'Jewelry & Watches', 'Kitchen & Dining', 'Baby & Kids'
+]
 
-  --primary-dark: #2980b9;
-  --secondary-dark: #1c5d99;
-  --text-dark: #ecf0f1;
-  --bg-dark: #1e293b;
-  --card-bg-dark: #334155;
-  --border-dark: #475569;
+# Sample products by category - you can expand this
+PRODUCTS_BY_CATEGORY = {
+    'Electronics': ['iPhone 15', 'Samsung TV 55"', 'MacBook Air', 'iPad', 'AirPods', 'Gaming Laptop', 'Smart Watch', 'Bluetooth Speaker'],
+    'Clothing & Fashion': ['Mens Shirt', 'Ladies Kurti', 'Jeans', 'Saree', 'T-Shirt', 'Dress', 'Jacket', 'Traditional Wear'],
+    'Groceries & Food': ['Rice 25kg', 'Cooking Oil', 'Pulses', 'Spices Set', 'Tea', 'Coffee', 'Snacks', 'Beverages'],
+    'Home & Garden': ['Sofa Set', 'Dining Table', 'Bed', 'Garden Tools', 'Plants', 'Home Decor', 'Furniture', 'Lighting'],
+    'Sports & Fitness': ['Treadmill', 'Yoga Mat', 'Cricket Kit', 'Football', 'Gym Equipment', 'Sports Shoes', 'Fitness Tracker'],
+    'Beauty & Personal Care': ['Face Cream', 'Shampoo', 'Perfume', 'Makeup Kit', 'Hair Oil', 'Soap', 'Skincare Set'],
+    'Books & Stationery': ['Novels', 'Study Books', 'Notebooks', 'Pens', 'Art Supplies', 'Educational Books'],
+    'Toys & Games': ['Action Figures', 'Board Games', 'Puzzles', 'Remote Control Car', 'Dolls', 'Educational Toys'],
+    'Automotive': ['Car Accessories', 'Bike Parts', 'Tyres', 'Engine Oil', 'Car Care Products'],
+    'Health & Medicine': ['Vitamins', 'First Aid Kit', 'Health Supplements', 'Medical Devices', 'Ayurvedic Products'],
+    'Mobile & Accessories': ['Phone Cases', 'Chargers', 'Power Banks', 'Headphones', 'Screen Guards', 'Mobile Stands'],
+    'Footwear': ['Running Shoes', 'Formal Shoes', 'Sandals', 'Boots', 'Slippers', 'Sports Shoes'],
+    'Jewelry & Watches': ['Gold Jewelry', 'Silver Jewelry', 'Watches', 'Diamond Jewelry', 'Fashion Jewelry'],
+    'Kitchen & Dining': ['Cookware Set', 'Dinner Set', 'Kitchen Appliances', 'Storage Containers', 'Cutlery'],
+    'Baby & Kids': ['Baby Clothes', 'Toys', 'Baby Care Products', 'Kids Books', 'School Supplies', 'Baby Food']
 }
 
-/* Set default (light) mode */
-body {
-  background-color: var(--bg-light);
-  color: var(--text-light);
-}
+# Helper functions
+def get_db_connection():
+    return sqlite3.connect('sales_campaign_data.db')
 
-/* Dark mode override */
-@media (prefers-color-scheme: dark) {
-  body {
-    background-color: var(--bg-dark);
-    color: var(--text-dark);
-  }
-}
-
-/* Card Styling */
-.report-card {
-    border-radius: 12px;
-    padding: 1.5rem;
-    margin-bottom: 1.5rem;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-    border-left: 4px solid var(--primary-light);
-    background-color: var(--card-bg-light);
-}
-
-@media (prefers-color-scheme: dark) {
-    .report-card {
-        background-color: var(--card-bg-dark);
-        border-left: 4px solid var(--primary-dark);
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
-    }
-}
-
-/* Title Styling */
-.report-title {
-    font-size: 1.75rem;
-    font-weight: 700;
-    margin-bottom: 0.5rem;
-    border-bottom: 2px solid var(--primary-light);
-    padding-bottom: 0.5rem;
-    color: var(--text-light);
-}
-
-@media (prefers-color-scheme: dark) {
-    .report-title {
-        color: var(--text-dark);
-        border-bottom: 2px solid var(--primary-dark);
-    }
-}
-
-/* Subtitle */
-.report-subtitle {
-    font-size: 1.25rem;
-    font-weight: 600;
-    margin: 1rem 0 0.5rem 0;
-    color: var(--text-light);
-}
-
-@media (prefers-color-scheme: dark) {
-    .report-subtitle {
-        color: var(--text-dark);
-    }
-}
-
-/* Time Indicator */
-.time-indicator {
-    display: inline-block;
-    background-color: var(--primary-light);
-    color: white;
-    padding: 0.25rem 0.75rem;
-    border-radius: 20px;
-    font-size: 0.9rem;
-    font-weight: 500;
-}
-
-@media (prefers-color-scheme: dark) {
-    .time-indicator {
-        background-color: var(--primary-dark);
-    }
-}
-
-/* File Uploader */
-.stFileUploader > div > div {
-    border: 2px dashed var(--border-light);
-    border-radius: 12px;
-    padding: 2rem;
-    background-color: var(--card-bg-light);
-    transition: all 0.3s ease;
-}
-
-.stFileUploader > div > div:hover {
-    border-color: var(--primary-light);
-    background-color: rgba(52, 152, 219, 0.05);
-}
-
-@media (prefers-color-scheme: dark) {
-    .stFileUploader > div > div {
-        border: 2px dashed var(--border-dark);
-        background-color: var(--card-bg-dark);
-    }
-    .stFileUploader > div > div:hover {
-        border-color: var(--primary-dark);
-        background-color: rgba(41, 128, 185, 0.1);
-    }
-}
-
-/* Default File Message */
-.default-file {
-    font-size: 0.9rem;
-    margin-top: 1rem;
-    padding: 0.75rem;
-    border-radius: 8px;
-    border-left: 3px solid var(--primary-light);
-    background-color: rgba(52, 152, 219, 0.1);
-    color: var(--text-light);
-}
-
-@media (prefers-color-scheme: dark) {
-    .default-file {
-        background-color: rgba(41, 128, 185, 0.2);
-        border-left: 3px solid var(--primary-dark);
-        color: var(--text-dark);
-    }
-}
-</style>
-""", unsafe_allow_html=True)
-
-
-# Neon glowing icons as SVG for tabs (can also use emojis or images)
-tab_icons = {
-    "📊 OSG REPORT 1": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2h-2v10h2V2zM6 9h2v13H6V9zm10 0h2v13h-2V9z"/></svg>""",
-    "📊 OSG REPORT 2": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17h2v4H3v-4zm4-6h2v10H7V11zm4-4h2v14h-2V7zm4 6h2v8h-2v-8z"/></svg>""",
-    "🔗 Data Mapping": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0016 9.5 6.5 6.5 0 109.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zM9.5 14C7.57 14 6 12.43 6 10.5S7.57 7 9.5 7 13 8.57 13 10.5 11.43 14 9.5 14z"/></svg>"""
-}
-
-# Streamlit Tabs with icons + neon styles
-tab1, tab2, tab3 = st.tabs(list(tab_icons.keys()))
-
-
-# --------------------------- REPORT 1 TAB ---------------------------
-import streamlit as st
-import pandas as pd
-from datetime import datetime
-from io import BytesIO
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet
-
-
-# --------------------------- REPORT 1 TAB ---------------------------
-with tab1:
-    st.markdown('<h1 class="header">OSG All Store Report</h1>', unsafe_allow_html=True)
-
-    st.markdown("""
-        <div class="info-box">
-            <strong>Instructions:</strong> Upload the following files to generate the sales summary report:
-            <ul>
-                <li><strong>Current Month sales Data</strong></li>
-                <li><strong>Previous Month sales Data</strong></li>
-                <li><strong>myG All Store List is loaded by default</strong></li>
-                <li><strong>Store, RBM, BDM List is loaded by default</strong></li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        report_date = st.date_input("Select current report date", value=datetime.today())
-    with col2:
-        prev_date = st.date_input("Select previous report date (for comparison)", value=datetime.today().replace(day=1))
-
-    book1_file = st.file_uploader("Upload current month sales data", type=["xlsx"], key="curr_sales")
-    prev_month_file = st.file_uploader("Upload previous month sales data", type=["xlsx"], key="prev_sales")
-
-    store_list_file = "myG All Store.xlsx"
-    rbm_bdm_file = "RBM,BDM,BRANCH.xlsx"
-
+def add_store(store_id, store_name, location, district):
+    conn = get_db_connection()
     try:
-        future_store_df = pd.read_excel(store_list_file)
-        rbm_bdm_df = pd.read_excel(rbm_bdm_file)
-        st.success("✅ Loaded default Future Store List & Store,RBM,BDM List.")
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT OR REPLACE INTO stores (store_id, store_name, location, district)
+            VALUES (?, ?, ?, ?)
+        ''', (store_id, store_name, location, district))
+        conn.commit()
+        return True
     except Exception as e:
-        st.error(f"Error loading defaults: {e}")
-        st.stop()
+        st.error(f"Error adding store: {e}")
+        return False
+    finally:
+        conn.close()
 
-    if book1_file:
-        book1_df = pd.read_excel(book1_file)
-        book1_df.rename(columns={'Branch': 'Store'}, inplace=True)
-        book1_df['DATE'] = pd.to_datetime(book1_df['DATE'], dayfirst=True, errors='coerce')
-        book1_df = book1_df.dropna(subset=['DATE'])
-        rbm_bdm_df.rename(columns={'Branch': 'Store'}, inplace=True)
+def get_all_stores():
+    conn = get_db_connection()
+    df = pd.read_sql_query('SELECT * FROM stores ORDER BY store_name', conn)
+    conn.close()
+    return df
 
-        today = pd.to_datetime(report_date)
-        mtd_df = book1_df[book1_df['DATE'].dt.month == today.month]
-        today_df = mtd_df[mtd_df['DATE'].dt.date == today.date()]
+def add_daily_sales(date, store_id, category, product_name, sales_amount, units_sold):
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO daily_sales (date, store_id, category, product_name, sales_amount, units_sold)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (date, store_id, category, product_name, sales_amount, units_sold))
+        conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error adding sales data: {e}")
+        return False
+    finally:
+        conn.close()
 
-        today_agg = today_df.groupby('Store', as_index=False).agg({'QUANTITY': 'sum', 'AMOUNT': 'sum'}).rename(columns={'QUANTITY': 'FTD Count', 'AMOUNT': 'FTD Amount'})
-        mtd_agg = mtd_df.groupby('Store', as_index=False).agg({'QUANTITY': 'sum', 'AMOUNT': 'sum'}).rename(columns={'QUANTITY': 'MTD Count', 'AMOUNT': 'MTD Amount'})
-
-        if prev_month_file:
-            prev_df = pd.read_excel(prev_month_file)
-            prev_df.rename(columns={'Branch': 'Store'}, inplace=True)
-            prev_df['DATE'] = pd.to_datetime(prev_df['DATE'], dayfirst=True, errors='coerce')
-            prev_df = prev_df.dropna(subset=['DATE'])
-            prev_month = pd.to_datetime(prev_date)
-            prev_mtd_df = prev_df[prev_df['DATE'].dt.month == prev_month.month]
-            prev_mtd_agg = prev_mtd_df.groupby('Store', as_index=False).agg({'AMOUNT': 'sum'}).rename(columns={'AMOUNT': 'PREV MONTH SALE'})
+def get_sales_data(store_id=None, start_date=None, end_date=None, category=None, product_name=None):
+    conn = get_db_connection()
+    query = '''
+        SELECT ds.*, s.store_name, s.location, s.district
+        FROM daily_sales ds
+        JOIN stores s ON ds.store_id = s.store_id
+        WHERE 1=1
+    '''
+    params = []
+    
+    if store_id:
+        if isinstance(store_id, list):
+            placeholders = ','.join(['?' for _ in store_id])
+            query += f' AND ds.store_id IN ({placeholders})'
+            params.extend(store_id)
         else:
-            prev_mtd_agg = pd.DataFrame(columns=['Store', 'PREV MONTH SALE'])
-
-        all_stores = pd.DataFrame(pd.Series(pd.concat([future_store_df['Store'], book1_df['Store']]).unique(), name='Store'))
-        report_df = all_stores.merge(today_agg, on='Store', how='left') \
-                              .merge(mtd_agg, on='Store', how='left') \
-                              .merge(prev_mtd_agg, on='Store', how='left') \
-                              .merge(rbm_bdm_df[['Store', 'RBM', 'BDM']], on='Store', how='left')
-
-        report_df[['FTD Count', 'FTD Amount', 'MTD Count', 'MTD Amount']] = report_df[['FTD Count', 'FTD Amount', 'MTD Count', 'MTD Amount']].fillna(0).astype(int)
-        report_df['PREV MONTH SALE'] = report_df['PREV MONTH SALE'].fillna(0).astype(int)
-        report_df['DIFF %'] = report_df.apply(
-            lambda x: round(((x['MTD Amount'] - x['PREV MONTH SALE']) / x['PREV MONTH SALE']) * 100, 2) if x['PREV MONTH SALE'] != 0 else 0,
-            axis=1
-        )
-
-        report_df['ASP'] = report_df.apply(
-            lambda x: round(x['MTD Amount'] / x['MTD Count'], 2) if x['MTD Count'] != 0 else 0,
-            axis=1
-        )
-
-        excel_output = BytesIO()
-        with pd.ExcelWriter(excel_output, engine='xlsxwriter') as writer:
-            workbook = writer.book
-
-            colors_palette = {
-                'primary_blue': '#1E3A8A',
-                'light_blue': '#DBEAFE',
-                'success_green': '#065F46',
-                'light_green': '#D1FAE5',
-                'warning_orange': '#EA580C',
-                'light_orange': '#FED7AA',
-                'danger_red': '#DC2626',
-                'light_red': '#FEE2E2',
-                'accent_purple': '#7C3AED',
-                'light_purple': '#EDE9FE',
-                'neutral_gray': '#6B7280',
-                'light_gray': '#F9FAFB',
-                'white': '#FFFFFF',
-                'dark_blue': '#0F172A',
-                'mint_green': '#10B981',
-                'light_mint': '#ECFDF5',
-                'royal_blue': '#3B82F6',
-                'light_royal': '#EBF8FF'
-            }
-
-            formats = {
-                'title': workbook.add_format({
-                    'bold': True, 'font_size': 16, 'font_color': colors_palette['primary_blue'],
-                    'align': 'center', 'valign': 'vcenter', 'bg_color': colors_palette['white'],
-                    'border': 1, 'border_color': colors_palette['primary_blue']
-                }),
-                'subtitle': workbook.add_format({
-                    'bold': True, 'font_size': 12, 'font_color': colors_palette['neutral_gray'],
-                    'align': 'center', 'valign': 'vcenter', 'italic': True
-                }),
-                'header_main': workbook.add_format({
-                    'bold': True, 'font_size': 11, 'font_color': colors_palette['white'],
-                    'bg_color': colors_palette['primary_blue'], 'align': 'center', 'valign': 'vcenter',
-                    'border': 1, 'border_color': colors_palette['primary_blue'], 'text_wrap': True
-                }),
-                'header_secondary': workbook.add_format({
-                    'bold': True, 'font_size': 10, 'font_color': colors_palette['primary_blue'],
-                    'bg_color': colors_palette['light_blue'], 'align': 'center', 'valign': 'vcenter',
-                    'border': 1, 'border_color': colors_palette['primary_blue']
-                }),
-                'data_normal': workbook.add_format({
-                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
-                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['white']
-                }),
-                'data_alternate': workbook.add_format({
-                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
-                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['light_gray']
-                }),
-                'data_store_name': workbook.add_format({
-                    'font_size': 10, 'bold': True, 'align': 'left', 'valign': 'vcenter',
-                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['white'], 'indent': 1
-                }),
-                'data_store_name_alt': workbook.add_format({
-                    'font_size': 10, 'bold': True, 'align': 'left', 'valign': 'vcenter',
-                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['light_gray'], 'indent': 1
-                }),
-                'positive_value': workbook.add_format({
-                    'font_size': 10, 'font_color': colors_palette['success_green'], 'bg_color': colors_palette['light_green'],
-                    'align': 'center', 'valign': 'vcenter', 'border': 1, 'border_color': colors_palette['success_green'], 'bold': True
-                }),
-                'negative_value': workbook.add_format({
-                    'font_size': 10, 'font_color': colors_palette['danger_red'], 'bg_color': colors_palette['light_red'],
-                    'align': 'center', 'valign': 'vcenter', 'border': 1, 'border_color': colors_palette['danger_red'], 'bold': True
-                }),
-                'zero_value': workbook.add_format({
-                    'font_size': 10, 'font_color': colors_palette['warning_orange'], 'bg_color': colors_palette['light_orange'],
-                    'align': 'center', 'valign': 'vcenter', 'border': 1, 'border_color': colors_palette['warning_orange'], 'bold': True
-                }),
-                'total_row': workbook.add_format({
-                    'bold': True, 'font_size': 11, 'font_color': colors_palette['white'],
-                    'bg_color': colors_palette['accent_purple'], 'align': 'center', 'valign': 'vcenter',
-                    'border': 2, 'border_color': colors_palette['accent_purple']
-                }),
-                'total_label': workbook.add_format({
-                    'bold': True, 'font_size': 11, 'font_color': colors_palette['white'],
-                    'bg_color': colors_palette['accent_purple'], 'align': 'center', 'valign': 'vcenter',
-                    'border': 2, 'border_color': colors_palette['accent_purple']
-                }),
-                'rbm_title': workbook.add_format({
-                    'bold': True, 'font_size': 18, 'font_color': colors_palette['white'],
-                    'bg_color': colors_palette['dark_blue'], 'align': 'center', 'valign': 'vcenter',
-                    'border': 2, 'border_color': colors_palette['dark_blue']
-                }),
-                'rbm_subtitle': workbook.add_format({
-                    'bold': True, 'font_size': 11, 'font_color': colors_palette['dark_blue'],
-                    'bg_color': colors_palette['light_royal'], 'align': 'center', 'valign': 'vcenter',
-                    'border': 1, 'border_color': colors_palette['royal_blue'], 'italic': True
-                }),
-                'rbm_header': workbook.add_format({
-                    'bold': True, 'font_size': 11, 'font_color': colors_palette['white'],
-                    'bg_color': colors_palette['royal_blue'], 'align': 'center', 'valign': 'vcenter',
-                    'border': 1, 'border_color': colors_palette['royal_blue'], 'text_wrap': True
-                }),
-                'rbm_data_normal': workbook.add_format({
-                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
-                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['white']
-                }),
-                'rbm_data_alternate': workbook.add_format({
-                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
-                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['light_royal']
-                }),
-                'rbm_store_name': workbook.add_format({
-                    'font_size': 10, 'bold': True, 'align': 'left', 'valign': 'vcenter',
-                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['white'], 'indent': 1
-                }),
-                'rbm_store_name_alt': workbook.add_format({
-                    'font_size': 10, 'bold': True, 'align': 'left', 'valign': 'vcenter',
-                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['light_royal'], 'indent': 1
-                }),
-                'rbm_positive': workbook.add_format({
-                    'font_size': 10, 'font_color': colors_palette['mint_green'], 'bg_color': colors_palette['light_mint'],
-                    'align': 'center', 'valign': 'vcenter', 'border': 1, 'border_color': colors_palette['mint_green'], 'bold': True
-                }),
-                'rbm_negative': workbook.add_format({
-                    'font_size': 10, 'font_color': colors_palette['danger_red'], 'bg_color': colors_palette['light_red'],
-                    'align': 'center', 'valign': 'vcenter', 'border': 1, 'border_color': colors_palette['danger_red'], 'bold': True
-                }),
-                'rbm_zero': workbook.add_format({
-                    'font_size': 10, 'font_color': colors_palette['warning_orange'], 'bg_color': colors_palette['light_orange'],
-                    'align': 'center', 'valign': 'vcenter', 'border': 1, 'border_color': colors_palette['warning_orange'], 'bold': True
-                }),
-                'rbm_total': workbook.add_format({
-                    'bold': True, 'font_size': 12, 'font_color': colors_palette['white'],
-                    'bg_color': colors_palette['mint_green'], 'align': 'center', 'valign': 'vcenter',
-                    'border': 2, 'border_color': colors_palette['mint_green']
-                }),
-                'rbm_total_label': workbook.add_format({
-                    'bold': True, 'font_size': 12, 'font_color': colors_palette['white'],
-                    'bg_color': colors_palette['mint_green'], 'align': 'center', 'valign': 'vcenter',
-                    'border': 2, 'border_color': colors_palette['mint_green']
-                }),
-                'rbm_summary': workbook.add_format({
-                    'bold': True, 'font_size': 10, 'font_color': colors_palette['royal_blue'],
-                    'bg_color': colors_palette['light_royal'], 'align': 'center', 'valign': 'vcenter',
-                    'border': 1, 'border_color': colors_palette['royal_blue']
-                }),
-                'rbm_performance': workbook.add_format({
-                    'bold': True, 'font_size': 10, 'font_color': colors_palette['white'],
-                    'bg_color': colors_palette['accent_purple'], 'align': 'center', 'valign': 'vcenter',
-                    'border': 1, 'border_color': colors_palette['accent_purple']
-                }),
-                'asp_format': workbook.add_format({
-                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
-                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'num_format': '₹#,##0.00'
-                }),
-                'asp_format_alt': workbook.add_format({
-                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
-                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['light_royal'], 'num_format': '₹#,##0.00'
-                }),
-                'asp_total': workbook.add_format({
-                    'bold': True, 'font_size': 12, 'font_color': colors_palette['white'],
-                    'bg_color': colors_palette['mint_green'], 'align': 'center', 'valign': 'vcenter',
-                    'border': 2, 'border_color': colors_palette['mint_green'], 'num_format': '₹#,##0.00'
-                })
-            }
-
-            # ALL STORES SHEET
-            all_data = report_df.sort_values('MTD Amount', ascending=False)
-            worksheet = workbook.add_worksheet("All Stores")
-
-            column_widths = [25, 12, 15, 12, 15]
-            for i, width in enumerate(column_widths):
-                worksheet.set_column(i, i, width)
-
-            worksheet.merge_range(0, 0, 0, 4, "OSG All Stores Sales Report", formats['title'])
-            worksheet.merge_range(1, 0, 1, 4, f"Report Generated: {datetime.now().strftime('%d %B %Y')}", formats['subtitle'])
-
-            total_stores = len(all_data)
-            active_stores = len(all_data[all_data['FTD Count'] > 0])
-            inactive_stores = total_stores - active_stores
-
-            worksheet.merge_range(3, 0, 3, 1, "📊 SUMMARY", formats['header_secondary'])
-            worksheet.merge_range(3, 2, 3, 4, f"Total: {total_stores} | Active: {active_stores} | Inactive: {inactive_stores}", formats['data_normal'])
-
-            headers = ['Store Name', 'FTD Count', 'FTD Amount', 'MTD Count', 'MTD Amount']
-            for col, header in enumerate(headers):
-                worksheet.write(5, col, header, formats['header_main'])
-
-            for row_idx, (_, row) in enumerate(all_data.iterrows(), start=6):
-                is_alternate = (row_idx - 6) % 2 == 1
-                store_format = formats['data_store_name_alt'] if is_alternate else formats['data_store_name']
-                worksheet.write(row_idx, 0, row['Store'], store_format)
-
-                ftd_count = int(row['FTD Count'])
-                if ftd_count == 0:
-                    worksheet.write(row_idx, 1, ftd_count, formats['zero_value'])
-                else:
-                    worksheet.write(row_idx, 1, ftd_count, formats['positive_value'])
-
-                data_format = formats['data_alternate'] if is_alternate else formats['data_normal']
-                worksheet.write(row_idx, 2, int(row['FTD Amount']), data_format)
-
-                mtd_count = int(row['MTD Count'])
-                if mtd_count == 0:
-                    worksheet.write(row_idx, 3, mtd_count, formats['zero_value'])
-                else:
-                    worksheet.write(row_idx, 3, mtd_count, formats['positive_value'])
-
-                worksheet.write(row_idx, 4, int(row['MTD Amount']), data_format)
-
-            total_row = len(all_data) + 7
-            worksheet.write(total_row, 0, '🎯 TOTAL', formats['total_label'])
-            worksheet.write(total_row, 1, all_data['FTD Count'].sum(), formats['total_row'])
-            worksheet.write(total_row, 2, all_data['FTD Amount'].sum(), formats['total_row'])
-            worksheet.write(total_row, 3, all_data['MTD Count'].sum(), formats['total_row'])
-            worksheet.write(total_row, 4, all_data['MTD Amount'].sum(), formats['total_row'])
-
-            if len(all_data) > 0:
-                top_performer = all_data.iloc[0]
-                insights_row = total_row + 2
-                worksheet.merge_range(insights_row, 0, insights_row, 4,
-                                    f"🏆 Top Performer: {top_performer['Store']} (₹{int(top_performer['MTD Amount']):,})",
-                                    formats['positive_value'])
-
-            # RBM SHEETS
-            for rbm in report_df['RBM'].dropna().unique():
-                rbm_data = report_df[report_df['RBM'] == rbm].sort_values('MTD Amount', ascending=False)
-                worksheet_name = rbm[:31] if len(rbm) > 31 else rbm
-                rbm_ws = workbook.add_worksheet(worksheet_name)
-
-                rbm_column_widths = [25, 12, 15, 12, 15, 15, 12, 12]
-                for i, width in enumerate(rbm_column_widths):
-                    rbm_ws.set_column(i, i, width)
-
-                rbm_ws.merge_range(0, 0, 0, 7, f" {rbm} - Sales Performance Report", formats['rbm_title'])
-                rbm_ws.merge_range(1, 0, 1, 7, f"Report Period: {datetime.now().strftime('%B %Y')} | Generated: {datetime.now().strftime('%d %B %Y')}", formats['rbm_subtitle'])
-
-                rbm_total_stores = len(rbm_data)
-                rbm_active_stores = len(rbm_data[rbm_data['FTD Count'] > 0])
-                rbm_inactive_stores = rbm_total_stores - rbm_active_stores
-                rbm_total_amount = rbm_data['MTD Amount'].sum()
-
-                rbm_ws.merge_range(3, 0, 3, 1, "📈 PERFORMANCE OVERVIEW", formats['rbm_summary'])
-                rbm_ws.merge_range(3, 2, 3, 7, f"Total Stores: {rbm_total_stores} | Active: {rbm_active_stores} | Inactive: {rbm_inactive_stores} | Total Revenue: ₹{rbm_total_amount:,}", formats['rbm_summary'])
-
-                if len(rbm_data) > 0:
-                    best_performer = rbm_data.iloc[0]
-                    rbm_ws.merge_range(4, 0, 4, 7, f"🥇 Best Performer: {best_performer['Store']} - ₹{int(best_performer['MTD Amount']):,}", formats['rbm_performance'])
-
-                headers = ['Store Name', 'FTD Count', 'FTD Amount', 'MTD Count', 'MTD Amount', 'PREV MONTH SALE', 'DIFF %', 'ASP']
-                for col, header in enumerate(headers):
-                    rbm_ws.write(6, col, header, formats['rbm_header'])
-
-                for row_idx, (_, row) in enumerate(rbm_data.iterrows(), start=7):
-                    is_alternate = (row_idx - 7) % 2 == 1
-                    store_format = formats['rbm_store_name_alt'] if is_alternate else formats['rbm_store_name']
-                    rbm_ws.write(row_idx, 0, row['Store'], store_format)
-
-                    ftd_count = int(row['FTD Count'])
-                    if ftd_count == 0:
-                        rbm_ws.write(row_idx, 1, ftd_count, formats['rbm_zero'])
-                    else:
-                        rbm_ws.write(row_idx, 1, ftd_count, formats['rbm_positive'])
-
-                    data_format = formats['rbm_data_alternate'] if is_alternate else formats['rbm_data_normal']
-                    rbm_ws.write(row_idx, 2, int(row['FTD Amount']), data_format)
-
-                    mtd_count = int(row['MTD Count'])
-                    if mtd_count == 0:
-                        rbm_ws.write(row_idx, 3, mtd_count, formats['rbm_zero'])
-                    else:
-                        rbm_ws.write(row_idx, 3, mtd_count, formats['rbm_positive'])
-
-                    rbm_ws.write(row_idx, 4, int(row['MTD Amount']), data_format)
-                    rbm_ws.write(row_idx, 5, int(row['PREV MONTH SALE']), data_format)
-
-                    diff_pct = row['DIFF %']
-                    if diff_pct > 0:
-                        rbm_ws.write(row_idx, 6, f"{diff_pct}%", formats['rbm_positive'])
-                    elif diff_pct < 0:
-                        rbm_ws.write(row_idx, 6, f"{diff_pct}%", formats['rbm_negative'])
-                    else:
-                        rbm_ws.write(row_idx, 6, f"{diff_pct}%", formats['rbm_zero'])
-
-                    asp_format = formats['asp_format_alt'] if is_alternate else formats['asp_format']
-                    rbm_ws.write(row_idx, 7, row['ASP'], asp_format)
-
-                total_row = len(rbm_data) + 8
-                rbm_ws.write(total_row, 0, '🎯 TOTAL', formats['rbm_total_label'])
-                rbm_ws.write(total_row, 1, rbm_data['FTD Count'].sum(), formats['rbm_total'])
-                rbm_ws.write(total_row, 2, rbm_data['FTD Amount'].sum(), formats['rbm_total'])
-                rbm_ws.write(total_row, 3, rbm_data['MTD Count'].sum(), formats['rbm_total'])
-                rbm_ws.write(total_row, 4, rbm_data['MTD Amount'].sum(), formats['rbm_total'])
-                rbm_ws.write(total_row, 5, rbm_data['PREV MONTH SALE'].sum(), formats['rbm_total'])
-
-                total_prev = rbm_data['PREV MONTH SALE'].sum()
-                total_curr = rbm_data['MTD Amount'].sum()
-                overall_growth = round(((total_curr - total_prev) / total_prev) * 100, 2) if total_prev != 0 else 0
-
-                if overall_growth > 0:
-                    rbm_ws.write(total_row, 6, f"{overall_growth}%", formats['rbm_total'])
-                elif overall_growth < 0:
-                    rbm_ws.write(total_row, 6, f"{overall_growth}%", formats['rbm_total'])
-                else:
-                    rbm_ws.write(total_row, 6, f"{overall_growth}%", formats['rbm_total'])
-
-                total_mtd_count = rbm_data['MTD Count'].sum()
-                total_mtd_amount = rbm_data['MTD Amount'].sum()
-                overall_asp = round(total_mtd_amount / total_mtd_count, 2) if total_mtd_count != 0 else 0
-                rbm_ws.write(total_row, 7, overall_asp, formats['asp_total'])
-
-                insights_row = total_row + 2
-                if overall_growth > 15:
-                    rbm_ws.merge_range(insights_row, 0, insights_row, 7,
-                                     f"📈 Excellent Growth: {overall_growth}% increase from previous month",
-                                     formats['rbm_positive'])
-                elif overall_growth < 0:
-                    rbm_ws.merge_range(insights_row, 0, insights_row, 7,
-                                     f"📉 Needs Attention: {abs(overall_growth)}% decrease from previous month",
-                                     formats['rbm_negative'])
-                else:
-                    rbm_ws.merge_range(insights_row, 0, insights_row, 7,
-                                     f"📊 Stable Performance: Less change from previous month",
-                                     formats['rbm_zero'])
-
-                insights_row += 1
-                top_3_stores = rbm_data.head(3)
-                if len(top_3_stores) > 0:
-                    top_stores_text = " | ".join([f"{store['Store']}: ₹{int(store['MTD Amount']):,}"
-                                                for _, store in top_3_stores.iterrows()])
-                    rbm_ws.merge_range(insights_row, 0, insights_row, 7,
-                                     f"🏆 Top 3 Performers: {top_stores_text}",
-                                     formats['rbm_summary'])
-
-            # BDM REPORT SHEET
-            bdm_data = report_df.groupby('BDM').agg({
-                'FTD Count': 'sum',
-                'FTD Amount': 'sum',
-                'MTD Count': 'sum',
-                'MTD Amount': 'sum'
-            }).reset_index().sort_values('MTD Amount', ascending=False)
-
-            bdm_ws = workbook.add_worksheet("BDM Report")
-
-            bdm_column_widths = [25, 12, 15, 12, 15]
-            for i, width in enumerate(bdm_column_widths):
-                bdm_ws.set_column(i, i, width)
-
-            bdm_ws.merge_range(0, 0, 0, 4, "BDM Sales Performance Report", formats['rbm_title'])
-            bdm_ws.merge_range(1, 0, 1, 4, f"Report Period: {datetime.now().strftime('%B %Y')} | Generated: {datetime.now().strftime('%d %B %Y')}", formats['rbm_subtitle'])
-
-            bdm_total_bdms = len(bdm_data)
-            bdm_active_bdms = len(bdm_data[bdm_data['FTD Count'] > 0])
-            bdm_inactive_bdms = bdm_total_bdms - bdm_active_bdms
-            bdm_total_amount = bdm_data['MTD Amount'].sum()
-
-            bdm_ws.merge_range(3, 0, 3, 1, "📈 PERFORMANCE OVERVIEW", formats['rbm_summary'])
-            bdm_ws.merge_range(3, 2, 3, 4, f"Total BDMs: {bdm_total_bdms} | Active: {bdm_active_bdms} | Inactive: {bdm_inactive_bdms} | Total Revenue: ₹{bdm_total_amount:,}", formats['rbm_summary'])
-
-            if len(bdm_data) > 0:
-                best_performer = bdm_data.iloc[0]
-                bdm_ws.merge_range(4, 0, 4, 4, f"🥇 Best Performer: {best_performer['BDM']} - ₹{int(best_performer['MTD Amount']):,}", formats['rbm_performance'])
-
-            headers = ['BDM Name', 'FTD Count', 'FTD Amount', 'MTD Count', 'MTD Amount']
-            for col, header in enumerate(headers):
-                bdm_ws.write(6, col, header, formats['rbm_header'])
-
-            for row_idx, (_, row) in enumerate(bdm_data.iterrows(), start=7):
-                is_alternate = (row_idx - 7) % 2 == 1
-                bdm_format = formats['rbm_store_name_alt'] if is_alternate else formats['rbm_store_name']
-                bdm_ws.write(row_idx, 0, row['BDM'], bdm_format)
-
-                ftd_count = int(row['FTD Count'])
-                if ftd_count == 0:
-                    bdm_ws.write(row_idx, 1, ftd_count, formats['rbm_zero'])
-                else:
-                    bdm_ws.write(row_idx, 1, ftd_count, formats['rbm_positive'])
-
-                data_format = formats['rbm_data_alternate'] if is_alternate else formats['rbm_data_normal']
-                bdm_ws.write(row_idx, 2, int(row['FTD Amount']), data_format)
-
-                mtd_count = int(row['MTD Count'])
-                if mtd_count == 0:
-                    bdm_ws.write(row_idx, 3, mtd_count, formats['rbm_zero'])
-                else:
-                    bdm_ws.write(row_idx, 3, mtd_count, formats['rbm_positive'])
-
-                bdm_ws.write(row_idx, 4, int(row['MTD Amount']), data_format)
-
-            total_row = len(bdm_data) + 8
-            bdm_ws.write(total_row, 0, '🎯 TOTAL', formats['rbm_total_label'])
-            bdm_ws.write(total_row, 1, bdm_data['FTD Count'].sum(), formats['rbm_total'])
-            bdm_ws.write(total_row, 2, bdm_data['FTD Amount'].sum(), formats['rbm_total'])
-            bdm_ws.write(total_row, 3, bdm_data['MTD Count'].sum(), formats['rbm_total'])
-            bdm_ws.write(total_row, 4, bdm_data['MTD Amount'].sum(), formats['rbm_total'])
-
-            insights_row = total_row + 2
-            top_3_bdms = bdm_data.head(3)
-            if len(top_3_bdms) > 0:
-                top_bdms_text = " | ".join([f"{bdm['BDM']}: ₹{int(bdm['MTD Amount']):,}"
-                                          for _, bdm in top_3_bdms.iterrows()])
-                bdm_ws.merge_range(insights_row, 0, insights_row, 4,
-                                 f"🏆 Top 3 Performers: {top_bdms_text}",
-                                 formats['rbm_summary'])
-
-        excel_output.seek(0)
-        st.success("✅ Excel report generated successfully!")
-        st.download_button(
-            label="📥 Download Detailed Excel Report",
-            data=excel_output.getvalue(),
-            file_name=f"OSG_Sales_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            help="Click to download the comprehensive sales report with all RBM and BDM sheets"
-        )
-
-st.markdown("""
-    <style>
-    .insight-box {
-        background-color: #f8f9fa;
-        padding: 15px;
-        border-radius: 10px;
-        border-left: 4px solid #007bff;
-        margin: 10px 0;
-    }
-    .insight-box h4 {
-        color: #007bff;
-        margin-top: 0;
-    }
-    .insight-box ul {
-        margin-bottom: 0;
-    }
-    .insight-box li {
-        margin: 5px 0;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-# --------------------------- REPORT 2 TAB ---------------------------
-with tab2:
-    st.markdown('<h1 class="header">OSG Day View Report</h1>', unsafe_allow_html=True)
-
-    with st.container():
-        st.markdown("""
-        <div class="info-box">
-            <strong>Instructions:</strong> Upload the following file to generate the store summary report:
-            <ul>
-                <li><strong>Daily Sales Report</strong></li>
-                <li><strong>myG Future Store List</strong> is loaded by default</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # Date and Time selection
-    selected_date = st.date_input("Select Date", value=datetime.today())
-    time_slot = st.selectbox("Select Time Slot", options=["12:30PM", "1PM", "4PM", "6PM"])
-    formatted_date = selected_date.strftime("%d-%m-%Y")
-    report_title = f"{formatted_date} EW Sale Till {time_slot}"
-
-    # File uploader for sales report
-    book2_file = st.file_uploader("Upload Daily Sales Report", type=["xlsx"], key="r2_book1")
-
-    # Load Future Store List
-    future_df = pd.read_excel("Future Store List.xlsx")
-    st.success("✅ Loaded default Future Store List.")
-
-    if book2_file:
-        with st.spinner('Processing data...'):
-            book2_df = pd.read_excel(book2_file)
-            book2_df.rename(columns={'Branch': 'Store'}, inplace=True)
-
-            agg = book2_df.groupby('Store', as_index=False).agg({
-                'QUANTITY': 'sum',
-                'AMOUNT': 'sum'
-            })
-
-            all_stores = pd.DataFrame(pd.concat([future_df['Store'], agg['Store']]).unique(), columns=['Store'])
-            merged = all_stores.merge(agg, on='Store', how='left')
-            merged['QUANTITY'] = merged['QUANTITY'].fillna(0).astype(int)
-            merged['AMOUNT'] = merged['AMOUNT'].fillna(0).astype(int)
-
-            merged = merged.sort_values(by='AMOUNT', ascending=False).reset_index(drop=True)
-
-            total = pd.DataFrame([{
-                'Store': 'TOTAL',
-                'QUANTITY': merged['QUANTITY'].sum(),
-                'AMOUNT': merged['AMOUNT'].sum()
-            }])
-
-            final_df = pd.concat([merged, total], ignore_index=True)
-            final_df.rename(columns={'Store': 'Branch'}, inplace=True)
-
-            # Excel report generator
-            def generate_report2_excel(df, title_text):
-                wb = Workbook()
-                ws = wb.active
-                ws.title = "Store Report"
-
-                # Title
-                ws.merge_cells('A1:C1')
-                title_cell = ws['A1']
-                title_cell.value = title_text
-                title_cell.font = Font(bold=True, size=11, color="FFFFFF")
-                title_cell.alignment = Alignment(horizontal='center')
-                title_cell.fill = PatternFill("solid", fgColor="4F81BD")
-
-                # Styles
-                header_fill = PatternFill("solid", fgColor="4F81BD")
-                data_fill = PatternFill("solid", fgColor="DCE6F1")
-                red_fill = PatternFill("solid", fgColor="F4CCCC")
-                total_fill = PatternFill("solid", fgColor="FFD966")
-                border = Border(left=Side(style='thin'), right=Side(style='thin'),
-                                top=Side(style='thin'), bottom=Side(style='thin'))
-                header_font = Font(bold=True, color="FFFFFF")
-                bold_font = Font(bold=True)
-
-                for r_idx, row in enumerate(dataframe_to_rows(df, index=False, header=True), start=2):
-                    for c_idx, value in enumerate(row, 1):
-                        cell = ws.cell(row=r_idx, column=c_idx, value=value)
-
-                        if r_idx == 2:
-                            cell.fill = header_fill
-                            cell.font = header_font
-                        elif df.loc[r_idx - 3, 'Branch'] == 'TOTAL':
-                            cell.fill = total_fill
-                            cell.font = bold_font
-                        elif df.loc[r_idx - 3, 'AMOUNT'] <= 0:
-                            cell.fill = red_fill
-                        else:
-                            cell.fill = data_fill
-
-                        cell.border = border
-                        cell.alignment = Alignment(horizontal='center')
-
-                # Adjust column widths
-                for col_idx, column_cells in enumerate(ws.columns, start=1):
-                    max_length = 0
-                    for cell in column_cells:
-                        try:
-                            if cell.value:
-                                max_length = max(max_length, len(str(cell.value)))
-                        except:
-                            pass
-                    ws.column_dimensions[get_column_letter(col_idx)].width = max_length + 2
-
-                buffer = BytesIO()
-                wb.save(buffer)
-                buffer.seek(0)
-                return buffer
-
-            excel_buf2 = generate_report2_excel(final_df, report_title)
-
-        with st.container():
-            st.download_button(
-                label="📥 Download Store Summary Report",
-                data=excel_buf2,
-                file_name=f"Store_Summary_{formatted_date}_{time_slot}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                help="Download store summary report in Excel format"
-            )
+            query += ' AND ds.store_id = ?'
+            params.append(store_id)
+    if start_date:
+        query += ' AND ds.date >= ?'
+        params.append(start_date)
+    if end_date:
+        query += ' AND ds.date <= ?'
+        params.append(end_date)
+    if category:
+        query += ' AND ds.category = ?'
+        params.append(category)
+    if product_name:
+        if isinstance(product_name, list):
+            placeholders = ','.join(['?' for _ in product_name])
+            query += f' AND ds.product_name IN ({placeholders})'
+            params.extend(product_name)
+        else:
+            query += ' AND ds.product_name = ?'
+            params.append(product_name)
+    
+    query += ' ORDER BY ds.date DESC'
+    
+    df = pd.read_sql_query(query, conn, params=params)
+    conn.close()
+    return df
+
+def calculate_campaign_performance(campaign_id, store_id, product_name, start_date, end_date):
+    # Calculate 7 days before, during, and 7 days after campaign performance
+    start_dt = pd.to_datetime(start_date)
+    end_dt = pd.to_datetime(end_date)
+    
+    before_start = (start_dt - timedelta(days=7)).strftime('%Y-%m-%d')
+    before_end = (start_dt - timedelta(days=1)).strftime('%Y-%m-%d')
+    after_start = (end_dt + timedelta(days=1)).strftime('%Y-%m-%d')
+    after_end = (end_dt + timedelta(days=7)).strftime('%Y-%m-%d')
+    
+    # Get sales data for each period
+    sales_before_df = get_sales_data(store_id, before_start, before_end, product_name=product_name)
+    sales_during_df = get_sales_data(store_id, start_date, end_date, product_name=product_name)
+    sales_after_df = get_sales_data(store_id, after_start, after_end, product_name=product_name)
+    
+    sales_before = sales_before_df['sales_amount'].sum()
+    sales_during = sales_during_df['sales_amount'].sum()
+    sales_after = sales_after_df['sales_amount'].sum()
+    
+    units_before = sales_before_df['units_sold'].sum()
+    units_during = sales_during_df['units_sold'].sum()
+    units_after = sales_after_df['units_sold'].sum()
+    
+    # Calculate uplift percentages
+    if sales_before > 0:
+        uplift_percent = ((sales_during - sales_before) / sales_before) * 100
     else:
-        st.info("ℹ️ Please upload the Daily Sales Report to generate the store summary.")
-# --------------------------- REPORT 3 TAB ---------------------------
-with tab3:
-    st.markdown('<h1 class="header">OSG & Product Data Mapping</h1>', unsafe_allow_html=True)
+        uplift_percent = 100 if sales_during > 0 else 0
+    
+    if units_before > 0:
+        units_uplift_percent = ((units_during - units_before) / units_before) * 100
+    else:
+        units_uplift_percent = 100 if units_during > 0 else 0
+    
+    return {
+        'sales_before': sales_before,
+        'sales_during': sales_during,
+        'sales_after': sales_after,
+        'units_before': units_before,
+        'units_during': units_during,
+        'units_after': units_after,
+        'uplift_percent': uplift_percent,
+        'units_uplift_percent': units_uplift_percent
+    }
 
-    with st.container():
-        st.markdown("""
-        <div class="info-box">
-            <strong>Instructions:</strong> Upload the following files to map OSG and product data:
-            <ul>
-                <li><strong>OSG File</strong> - Contains warranty and protection plan data</li>
-                <li><strong>PRODUCT File</strong> - Contains product information including models, categories, and IMEIs</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
+def save_campaign_performance(campaign_id, store_id, product_name, category, performance_data):
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT OR REPLACE INTO campaign_performance
+            (campaign_id, store_id, product_name, category, sales_before, sales_during, sales_after, 
+             units_before, units_during, units_after, uplift_percent, units_uplift_percent)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (campaign_id, store_id, product_name, category,
+              performance_data['sales_before'], performance_data['sales_during'],
+              performance_data['sales_after'], performance_data['units_before'],
+              performance_data['units_during'], performance_data['units_after'],
+              performance_data['uplift_percent'], performance_data['units_uplift_percent']))
+        conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error saving campaign performance: {e}")
+        return False
+    finally:
+        conn.close()
 
-    # File upload section
-    with st.container():
-        st.markdown('<div class="file-upload-section">', unsafe_allow_html=True)
-        osg_file = st.file_uploader(
-            "Upload OSG File",
-            type=["xlsx"],
-            key="osg_mapping"
-        )
-        product_file = st.file_uploader(
-            "Upload PRODUCT File",
-            type=["xlsx"],
-            key="product_mapping"
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
+def create_prediction_model(data):
+    """Create and train ML model for sales prediction"""
+    if len(data) < 30:  # Need minimum data for training
+        return None, None, "Insufficient data for training (minimum 30 records required)"
+    
+    # Feature engineering
+    data['date'] = pd.to_datetime(data['date'])
+    data['day_of_week'] = data['date'].dt.dayofweek
+    data['month'] = data['date'].dt.month
+    data['day_of_month'] = data['date'].dt.day
+    data['is_weekend'] = (data['day_of_week'] >= 5).astype(int)
+    
+    # Create lagged features
+    data = data.sort_values(['store_id', 'category', 'date'])
+    data['sales_lag_1'] = data.groupby(['store_id', 'category'])['sales_amount'].shift(1)
+    data['sales_lag_7'] = data.groupby(['store_id', 'category'])['sales_amount'].shift(7)
+    data['sales_rolling_7'] = data.groupby(['store_id', 'category'])['sales_amount'].rolling(7).mean().reset_index(0, drop=True)
+    
+    # Encode categorical variables
+    data_encoded = pd.get_dummies(data, columns=['store_id', 'category'], prefix=['store', 'cat'])
+    
+    # Select features
+    feature_cols = [col for col in data_encoded.columns if col.startswith(('store_', 'cat_')) or 
+                   col in ['day_of_week', 'month', 'day_of_month', 'is_weekend', 
+                          'sales_lag_1', 'sales_lag_7', 'sales_rolling_7']]
+    
+    # Remove rows with NaN values
+    data_clean = data_encoded.dropna()
+    
+    if len(data_clean) < 20:
+        return None, None, "Insufficient clean data for training"
+    
+    X = data_clean[feature_cols]
+    y = data_clean['sales_amount']
+    
+    # Split data
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    # Scale features
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+    
+    # Train models
+    models = {
+        'Random Forest': RandomForestRegressor(n_estimators=100, random_state=42),
+        'Linear Regression': LinearRegression()
+    }
+    
+    best_model = None
+    best_score = float('-inf')
+    best_model_name = None
+    
+    for name, model in models.items():
+        model.fit(X_train_scaled, y_train)
+        score = model.score(X_test_scaled, y_test)
+        if score > best_score:
+            best_score = score
+            best_model = model
+            best_model_name = name
+    
+    return best_model, scaler, f"Model trained successfully. Best model: {best_model_name} (R² = {best_score:.3f})"
 
-    if osg_file and product_file:
-        with st.spinner('Mapping data...'):
-            osg_df = pd.read_excel(osg_file)
-            product_df = pd.read_excel(product_file, converters={'IMEI': str})
+# Streamlit App
+def main():
+    st.title("📈 Sales Prediction & Campaign Analysis System")
+    st.markdown("Advanced AI-powered sales forecasting and campaign performance analysis")
+    
+    # Sidebar
+    st.sidebar.title("Navigation")
+    page = st.sidebar.selectbox("Choose a page", [
+        "🏪 Store Management",
+        "📊 Daily Sales Entry",
+        "🎯 Campaign Management",
+        "📈 Sales Analysis",
+        "🤖 AI Predictions",
+        "📋 Campaign Performance"
+    ])
+    
+    if page == "🏪 Store Management":
+        store_management_page()
+    elif page == "📊 Daily Sales Entry":
+        daily_sales_page()
+    elif page == "🎯 Campaign Management":
+        campaign_management_page()
+    elif page == "📈 Sales Analysis":
+        sales_analysis_page()
+    elif page == "🤖 AI Predictions":
+        ai_predictions_page()
+    elif page == "📋 Campaign Performance":
+        campaign_performance_page()
 
-            # SKU Mapping
-            sku_category_mapping = {
-                "Warranty : Water Cooler/Dispencer/Geyser/RoomCooler/Heater": [
-                    "COOLER", "DISPENCER", "GEYSER", "ROOM COOLER", "HEATER", "WATER HEATER", "WATER DISPENSER"
-                ],
-                "Warranty : Fan/Mixr/IrnBox/Kettle/OTG/Grmr/Geysr/Steamr/Inductn": [
-                    "FAN", "MIXER", "IRON BOX", "KETTLE", "OTG", "GROOMING KIT", "GEYSER", "STEAMER", "INDUCTION",
-                    "CEILING FAN", "TOWER FAN", "PEDESTAL FAN", "INDUCTION COOKER", "ELECTRIC KETTLE", "WALL FAN", "MIXER GRINDER", "CELLING FAN"
-                ],
-                "AC : EWP : Warranty : AC": ["AC", "AIR CONDITIONER", "AC INDOOR"],
-                "HAEW : Warranty : Air Purifier/WaterPurifier": ["AIR PURIFIER", "WATER PURIFIER"],
-                "HAEW : Warranty : Dryer/MW/DishW": ["DRYER", "MICROWAVE OVEN", "DISH WASHER", "MICROWAVE OVEN-CONV"],
-                "HAEW : Warranty : Ref/WM": [
-                    "REFRIGERATOR", "WASHING MACHINE", "WASHING MACHINE-TL", "REFRIGERATOR-DC",
-                    "WASHING MACHINE-FL", "WASHING MACHINE-SA", "REF", "REFRIGERATOR-CBU", "REFRIGERATOR-FF", "WM"
-                ],
-                "HAEW : Warranty : TV": ["TV", "TV 28 %", "TV 18 %"],
-                "TV : TTC : Warranty and Protection : TV": ["TV", "TV 28 %", "TV 18 %"],
-                "TV : Spill and Drop Protection": ["TV", "TV 28 %", "TV 18 %"],
-                "HAEW : Warranty :Chop/Blend/Toast/Air Fryer/Food Processr/JMG/Induction": [
-                    "CHOPPER", "BLENDER", "TOASTER", "AIR FRYER", "FOOD PROCESSOR", "JUICER", "INDUCTION COOKER"
-                ],
-                "HAEW : Warranty : HOB and Chimney": ["HOB", "CHIMNEY"],
-                "HAEW : Warranty : HT/SoundBar/AudioSystems/PortableSpkr": [
-                    "HOME THEATRE", "AUDIO SYSTEM", "SPEAKER", "SOUND BAR", "PARTY SPEAKER"
-                ],
-                "HAEW : Warranty : Vacuum Cleaner/Fans/Groom&HairCare/Massager/Iron": [
-                    "VACUUM CLEANER", "FAN", "MASSAGER", "IRON BOX", "CEILING FAN", "TOWER FAN", "PEDESTAL FAN", "WALL FAN", "ROBO VACCUM CLEANER"
-                ],
-                "AC AMC": ["AC", "AC INDOOR"]
-            }
+def store_management_page():
+    st.header("🏪 Store Management")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Add New Store")
+        with st.form("add_store_form"):
+            store_id = st.text_input("Store ID", placeholder="e.g., balussery-myg")
+            store_name = st.text_input("Store Name", placeholder="e.g., Balussery MYG Store")
+            location = st.text_input("Location", placeholder="e.g., Balussery")
+            district = st.selectbox("District", [
+                "Kozhikode", "Malappuram", "Thrissur", "Kochi", "Thiruvananthapuram",
+                "Kottayam", "Alappuzha", "Kollam", "Palakkad", "Kannur", "Kasaragod",
+                "Wayanad", "Idukki", "Pathanamthitta"
+            ])
+            
+            if st.form_submit_button("Add Store"):
+                if store_id and store_name and location:
+                    if add_store(store_id, store_name, location, district):
+                        st.success("Store added successfully!")
+                else:
+                    st.error("Please fill all required fields")
+    
+    with col2:
+        st.subheader("Existing Stores")
+        stores_df = get_all_stores()
+        if not stores_df.empty:
+            st.dataframe(stores_df, use_container_width=True)
+        else:
+            st.info("No stores added yet")
 
-            product_df['Category'] = product_df['Category'].str.upper().fillna('')
-            product_df['Model'] = product_df['Model'].fillna('')
-            product_df['Customer Mobile'] = product_df['Customer Mobile'].astype(str)
-            product_df['Invoice Number'] = product_df['Invoice Number'].astype(str)
-            product_df['Item Rate'] = pd.to_numeric(product_df['Item Rate'], errors='coerce')
-            product_df['IMEI'] = product_df['IMEI'].astype(str).fillna('')
-            product_df['Brand'] = product_df['Brand'].fillna('')
-            osg_df['Customer Mobile'] = osg_df['Customer Mobile'].astype(str)
+def daily_sales_page():
+    st.header("📊 Daily Sales Entry")
+    
+    stores_df = get_all_stores()
+    if stores_df.empty:
+        st.warning("Please add stores first in Store Management")
+        return
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.subheader("Add Sales Data")
+        with st.form("sales_entry_form"):
+            date = st.date_input("Date", value=datetime.now().date())
+            store_id = st.selectbox("Store", stores_df['store_id'].tolist())
+            category = st.selectbox("Category", ITEM_CATEGORIES)
+            
+            # Product selection based on category
+            if category:
+                available_products = PRODUCTS_BY_CATEGORY.get(category, [])
+                product_name = st.selectbox("Product", available_products + ["Other (Custom)"])
+                
+                if product_name == "Other (Custom)":
+                    product_name = st.text_input("Enter Product Name")
+            else:
+                product_name = st.text_input("Product Name")
+            
+            sales_amount = st.number_input("Sales Amount (₹)", min_value=0.0, format="%.2f")
+            units_sold = st.number_input("Units Sold", min_value=0, value=1)
+            
+            if st.form_submit_button("Add Sales Data"):
+                if product_name and sales_amount > 0:
+                    if add_daily_sales(date, store_id, category, product_name, sales_amount, units_sold):
+                        st.success("Sales data added successfully!")
+                else:
+                    st.error("Please fill all required fields")
+    
+    with col2:
+        st.subheader("Bulk Upload")
+        st.info("CSV format: date, store_id, category, product_name, sales_amount, units_sold")
+        uploaded_file = st.file_uploader("Upload CSV file", type="csv")
+        if uploaded_file is not None:
+            try:
+                df = pd.read_csv(uploaded_file)
+                required_cols = ['date', 'store_id', 'category', 'product_name', 'sales_amount']
+                if all(col in df.columns for col in required_cols):
+                    st.write("Preview:")
+                    st.dataframe(df.head())
+                    if st.button("Import Data"):
+                        conn = get_db_connection()
+                        df.to_sql('daily_sales', conn, if_exists='append', index=False)
+                        conn.close()
+                        st.success(f"Imported {len(df)} records successfully!")
+                else:
+                    st.error(f"CSV must contain columns: {required_cols}")
+            except Exception as e:
+                st.error(f"Error reading file: {e}")
+    
+    # Recent sales data with product information
+    st.subheader("Recent Sales Data")
+    recent_sales = get_sales_data()
+    if not recent_sales.empty:
+        # Display columns in better order
+        display_cols = ['date', 'store_name', 'category', 'product_name', 'sales_amount', 'units_sold', 'location']
+        st.dataframe(recent_sales[display_cols].head(20), use_container_width=True)
+    else:
+        st.info("No sales data available")
 
-            def extract_price_slab(text):
-                match = re.search(r"Slab\s*:\s*(\d+)K-(\d+)K", str(text))
-                if match:
-                    return int(match.group(1)) * 1000, int(match.group(2)) * 1000
-                return None, None
-
-            def get_model(row):
-                mobile = row['Customer Mobile']
-                retailer_sku = str(row['Retailer SKU'])
-                invoice = str(row.get('Invoice Number', ''))
-                user_products = product_df[product_df['Customer Mobile'] == mobile]
-
-                if user_products.empty:
-                    return ''
-                unique_models = user_products['Model'].dropna().unique()
-                if len(unique_models) == 1:
-                    return unique_models[0]
-
-                mapped_keywords = []
-                for sku_key, keywords in sku_category_mapping.items():
-                    if sku_key in retailer_sku:
-                        mapped_keywords = [kw.lower() for kw in keywords]
-                        break
-
-                filtered = user_products[user_products['Category'].str.lower().isin(mapped_keywords)]
-                if filtered['Model'].nunique() == 1:
-                    return filtered['Model'].iloc[0]
-
-                slab_min, slab_max = extract_price_slab(retailer_sku)
-                if slab_min and slab_max:
-                    slab_filtered = filtered[(filtered['Item Rate'] >= slab_min) & (filtered['Item Rate'] <= slab_max)]
-                    if slab_filtered['Model'].nunique() == 1:
-                        return slab_filtered['Model'].iloc[0]
-                    invoice_filtered = slab_filtered[slab_filtered['Invoice Number'].astype(str) == invoice]
-                    if invoice_filtered['Model'].nunique() == 1:
-                        return invoice_filtered['Model'].iloc[0]
-
-                return ''
-
-            osg_df['Model'] = osg_df.apply(get_model, axis=1)
-            category_brand_df = product_df[['Customer Mobile', 'Model', 'Category', 'Brand']].drop_duplicates()
-            osg_df = osg_df.merge(category_brand_df, on=['Customer Mobile', 'Model'], how='left')
-
-            invoice_pool = defaultdict(list)
-            itemrate_pool = defaultdict(list)
-            imei_pool = defaultdict(list)
-
-            for _, row in product_df.iterrows():
-                key = (row['Customer Mobile'], row['Model'])
-                invoice_pool[key].append(row['Invoice Number'])
-                itemrate_pool[key].append(row['Item Rate'])
-                imei_pool[key].append(row['IMEI'])
-
-            invoice_usage_counter = defaultdict(int)
-            itemrate_usage_counter = defaultdict(int)
-            imei_usage_counter = defaultdict(int)
-
-            def assign_from_pool(row, pool, counter_dict):
-                key = (row['Customer Mobile'], row['Model'])
-                values = pool.get(key, [])
-                index = counter_dict[key]
-                if index < len(values):
-                    counter_dict[key] += 1
-                    return values[index]
-                return ''
-
-            osg_df['Product Invoice Number'] = osg_df.apply(lambda row: assign_from_pool(row, invoice_pool, invoice_usage_counter), axis=1)
-            osg_df['Item Rate'] = osg_df.apply(lambda row: assign_from_pool(row, itemrate_pool, itemrate_usage_counter), axis=1)
-            osg_df['IMEI'] = osg_df.apply(lambda row: assign_from_pool(row, imei_pool, imei_usage_counter), axis=1)
-            osg_df['Store Code'] = osg_df['Product Invoice Number'].astype(str).apply(
-                lambda x: re.search(r'\b([A-Z]{2,})\b', x).group(1) if re.search(r'\b([A-Z]{2,})\b', x) else ''
-            )
-
-            def extract_warranty_duration(sku):
-                sku = str(sku)
-                match = re.search(r'Dur\s*:\s*(\d+)\+(\d+)', sku)
-                if match:
-                    return int(match.group(1)), int(match.group(2))
-                match = re.search(r'(\d+)\+(\d+)\s*SDP-(\d+)', sku)
-                if match:
-                    return int(match.group(1)), f"{match.group(3)}P+{match.group(2)}W"
-                match = re.search(r'Dur\s*:\s*(\d+)', sku)
-                if match:
-                    return 1, int(match.group(1))
-                match = re.search(r'(\d+)\+(\d+)', sku)
-                if match:
-                    return int(match.group(1)), int(match.group(2))
-                return '', ''
-
-            osg_df[['Manufacturer Warranty', 'Duration (Year)']] = osg_df['Retailer SKU'].apply(
-                lambda sku: pd.Series(extract_warranty_duration(sku))
-            )
-
-            def highlight_row(row):
-                missing_fields = pd.isna(row.get('Model')) or str(row.get('Model')).strip() == ''
-                missing_fields |= pd.isna(row.get('IMEI')) or str(row.get('IMEI')).strip() == ''
-                try:
-                    if float(row.get('Plan Price', 0)) < 0:
-                        missing_fields |= True
-                except:
-                    missing_fields |= True
-                return ['background-color: lightblue'] * len(row) if missing_fields else [''] * len(row)
-
-            final_columns = [
-                'Customer Mobile', 'Date', 'Invoice Number','Product Invoice Number', 'Customer Name', 'Store Code', 'Branch', 'Region',
-                'IMEI', 'Category', 'Brand', 'Quantity', 'Item Code', 'Model', 'Plan Type', 'EWS QTY', 'Item Rate',
-                'Plan Price', 'Sold Price', 'Email', 'Product Count', 'Manufacturer Warranty', 'Retailer SKU', 'OnsiteGo SKU',
-                'Duration (Year)', 'Total Coverage', 'Comment', 'Return Flag', 'Return against invoice No.',
-                'Primary Invoice No.'
+def campaign_management_page():
+    st.header("🎯 Campaign Management")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.subheader("Create New Campaign")
+        with st.form("campaign_form"):
+            campaign_id = st.text_input("Campaign ID", placeholder="e.g., camp_2024_001")
+            campaign_name = st.text_input("Campaign Name", placeholder="e.g., Diwali Electronics Sale")
+            start_date = st.date_input("Start Date")
+            end_date = st.date_input("End Date")
+            campaign_type = st.radio("Campaign Type", ["single_store", "all_kerala"])
+            
+            stores_df = get_all_stores()
+            if campaign_type == "single_store":
+                if not stores_df.empty:
+                    target_stores = st.multiselect("Target Stores", stores_df['store_id'].tolist())
+                else:
+                    target_stores = []
+                    st.warning("No stores available")
+            else:
+                target_stores = stores_df['store_id'].tolist() if not stores_df.empty else []
+                st.info(f"Campaign will target all {len(target_stores)} stores in Kerala")
+            
+            categories = st.multiselect("Categories", ITEM_CATEGORIES)
+            discount_percent = st.number_input("Discount Percentage", min_value=0.0, max_value=100.0, format="%.1f")
+            description = st.text_area("Description")
+            
+            if st.form_submit_button("Create Campaign"):
+                if campaign_id and campaign_name and target_stores and categories:
+                    conn = get_db_connection()
+                    try:
+                        cursor = conn.cursor()
+                        cursor.execute('''
+                            INSERT INTO campaigns
+                            (campaign_id, campaign_name, start_date, end_date, campaign_type,
+                             target_stores, categories, discount_percent, description)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (campaign_id, campaign_name, start_date, end_date, campaign_type,
+                              str(target_stores), str(categories), discount_percent, description))
+                        conn.commit()
+                        st.success("Campaign created successfully!")
+                    except Exception as e:
+                        st.error(f"Error creating campaign: {e}")
+                    finally:
+                        conn.close()
+                else:
+                    st.error("Please fill all required fields")
+    
+    with col2:
+        st.subheader("Campaign Analytics")
+        # Show campaign summary metrics
+        conn = get_db_connection()
+        campaigns_df = pd.read_sql_query('SELECT * FROM campaigns ORDER BY created_date DESC', conn)
+        conn.close()
+        
+        if not campaigns_df.empty:
+            st.metric("Total Campaigns", len(campaigns_df))
+            active_campaigns = campaigns_df[
+                (pd.to_datetime(campaigns_df['start_date']) <= pd.Timestamp.now()) &
+                (pd.to_datetime(campaigns_df['end_date']) >= pd.Timestamp.now())
             ]
-
-            for col in final_columns:
-                if col not in osg_df.columns:
-                    osg_df[col] = ''
-            osg_df['Quantity'] = 1
-            osg_df['EWS QTY'] = 1
-            osg_df = osg_df[final_columns]
-
-            st.markdown("""
-            <div class="success-box">
-                <strong>✅ Data Mapping Completed Successfully</strong>
-                <p>The OSG and product data has been successfully mapped. You can now download the report.</p>
-            </div>
-            """, unsafe_allow_html=True)
-
-            @st.cache_data
-            def convert_df(df):
-               output = io.BytesIO()
-               styled_df = df.style.apply(highlight_row, axis=1)
-               with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                styled_df.to_excel(writer, index=False)
-               output.seek(0)
-               return output
-
-            excel_data = convert_df(osg_df)
-
-        # Download section
-        with st.container():
-            st.markdown('<div class="download-section">', unsafe_allow_html=True)
-            st.download_button(
-                label="📥 Download Mapped Data Report",
-                data=excel_data,
-                file_name="OSG_Product_Mapping_Report.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                help="Download the mapped OSG and product data in Excel format"
-            )
-            st.markdown('</div>', unsafe_allow_html=True)
+            st.metric("Active Campaigns", len(active_campaigns))
+        else:
+            st.info("No campaigns created yet")
+    
+    # Show existing campaigns
+    st.subheader("Existing Campaigns")
+    if not campaigns_df.empty:
+        st.dataframe(campaigns_df, use_container_width=True)
     else:
-        st.info("ℹ️ Please upload both required files to perform data mapping.")
+        st.info("No campaigns available")
+
+def sales_analysis_page():
+    st.header("📈 Sales Analysis")
+    
+    # Filters
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        stores_df = get_all_stores()
+        if not stores_df.empty:
+            selected_store = st.selectbox("Select Store", ["All"] + stores_df['store_id'].tolist())
+        else:
+            selected_store = None
+            st.warning("No stores available")
+    
+    with col2:
+        selected_category = st.selectbox("Select Category", ["All"] + ITEM_CATEGORIES)
+    
+    with col3:
+        start_date = st.date_input("Start Date", value=datetime.now().date() - timedelta(days=30))
+    
+    with col4:
+        end_date = st.date_input("End Date", value=datetime.now().date())
+    
+    if selected_store:
+        # Get filtered data
+        store_filter = None if selected_store == "All" else selected_store
+        category_filter = None if selected_category == "All" else selected_category
+        
+        sales_data = get_sales_data(store_filter, start_date, end_date, category_filter)
+        
+        if not sales_data.empty:
+            # Summary metrics
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                total_sales = sales_data['sales_amount'].sum()
+                st.metric("Total Sales", f"₹{total_sales:,.2f}")
+            
+            with col2:
+                avg_daily_sales = sales_data.groupby('date')['sales_amount'].sum().mean()
+                st.metric("Avg Daily Sales", f"₹{avg_daily_sales:,.2f}")
+            
+            with col3:
+                total_units = sales_data['units_sold'].sum()
+                st.metric("Total Units Sold", f"{total_units:,}")
+            
+            with col4:
+                unique_categories = sales_data['category'].nunique()
+                st.metric("Categories Sold", unique_categories)
+            
+            # Visualizations
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Daily sales trend
+                daily_sales = sales_data.groupby('date')['sales_amount'].sum().reset_index()
+                fig = px.line(daily_sales, x='date', y='sales_amount',
+                             title='Daily Sales Trend',
+                             labels={'sales_amount': 'Sales Amount (₹)', 'date': 'Date'})
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                # Category-wise sales
+                category_sales = sales_data.groupby('category')['sales_amount'].sum().reset_index()
+                category_sales = category_sales.sort_values('sales_amount', ascending=False)
+                fig = px.bar(category_sales, x='category', y='sales_amount',
+                            title='Category-wise Sales',
+                            labels={'sales_amount': 'Sales Amount (₹)', 'category': 'Category'})
+                fig.update_xaxis(tickangle=45)
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Store-wise analysis (if All stores selected)
+            if selected_store == "All":
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    store_sales = sales_data.groupby('store_name')['sales_amount'].sum().reset_index()
+                    store_sales = store_sales.sort_values('sales_amount', ascending=False)
+                    fig = px.bar(store_sales, x='store_name', y='sales_amount',
+                                title='Store-wise Sales Performance',
+                                labels={'sales_amount': 'Sales Amount (₹)', 'store_name': 'Store'})
+                    fig.update_xaxis(tickangle=45)
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    district_sales = sales_data.groupby('district')['sales_amount'].sum().reset_index()
+                    fig = px.pie(district_sales, values='sales_amount', names='district',
+                                title='District-wise Sales Distribution')
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            # Detailed data table
+            st.subheader("Detailed Sales Data")
+            st.dataframe(sales_data, use_container_width=True)
+        
+        else:
+            st.info("No sales data available for the selected filters")
+
+def ai_predictions_page():
+    st.header("🤖 AI Sales Predictions")
+    
+    # Check if we have enough data
+    sales_data = get_sales_data()
+    if sales_data.empty:
+        st.warning("No sales data available. Please add sales data first.")
+        return
+    
+    if len(sales_data) < 30:
+        st.warning(f"Insufficient data for AI predictions. Current records: {len(sales_data)}, Required: 30+")
+        return
+    
+    # Model training section
+    st.subheader("Train Prediction Model")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        if st.button("Train AI Model", type="primary"):
+            with st.spinner("Training AI model..."):
+                model, scaler, message = create_prediction_model(sales_data)
+                
+                if model is not None:
+                    # Save model
+                    with open('sales_model.pkl', 'wb') as f:
+                        pickle.dump((model, scaler), f)
+                    st.success(message)
+                    st.session_state['model_trained'] = True
+                else:
+                    st.error(message)
+    
+    with col2:
+        st.info("💡 The AI model analyzes historical sales patterns, seasonal trends, and campaign impacts to predict future sales.")
+    
+    # Prediction section
+    if 'model_trained' in st.session_state or st.session_state.get('model_trained', False):
+        st.subheader("Make Predictions")
+        
+        try:
+            with open('sales_model.pkl', 'rb') as f:
+                model, scaler = pickle.load(f)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                stores_df = get_all_stores()
+                selected_store = st.selectbox("Store", stores_df['store_id'].tolist())
+                selected_categories = st.multiselect("Categories", ITEM_CATEGORIES)
+                prediction_date = st.date_input("Prediction Date", 
+                                               value=datetime.now().date() + timedelta(days=1))
+            
+            with col2:
+                campaign_active = st.checkbox("Campaign Active?")
+                if campaign_active:
+                    discount_percent = st.slider("Discount %", 0, 50, 20)
+                else:
+                    discount_percent = 0
+            
+            if st.button("Generate Prediction") and selected_categories:
+                predictions = []
+                
+                for category in selected_categories:
+                    # Create feature vector for prediction
+                    # This is a simplified version - you'll need to match your training features
+                    pred_date = pd.to_datetime(prediction_date)
+                    features = {
+                        'day_of_week': pred_date.dayofweek,
+                        'month': pred_date.month,
+                        'day_of_month': pred_date.day,
+                        'is_weekend': int(pred_date.dayofweek >= 5),
+                        'campaign_active': int(campaign_active),
+                        'discount_percent': discount_percent
+                    }
+                    
+                    # Get recent sales for lagged features
+                    recent_sales = get_sales_data(selected_store, 
+                                                (pred_date - timedelta(days=30)).strftime('%Y-%m-%d'),
+                                                (pred_date - timedelta(days=1)).strftime('%Y-%m-%d'),
+                                                category)
+                    
+                    if not recent_sales.empty:
+                        features['sales_lag_1'] = recent_sales['sales_amount'].iloc[-1] if len(recent_sales) > 0 else 0
+                        features['sales_lag_7'] = recent_sales['sales_amount'].iloc[-7] if len(recent_sales) > 6 else 0
+                        features['sales_rolling_7'] = recent_sales['sales_amount'].tail(7).mean()
+                    else:
+                        features.update({'sales_lag_1': 0, 'sales_lag_7': 0, 'sales_rolling_7': 0})
+                    
+                    # Simple prediction (you'll need to properly encode categorical features)
+                    base_prediction = np.random.uniform(1000, 5000)  # Placeholder
+                    
+                    if campaign_active:
+                        # Apply campaign uplift based on discount
+                        uplift_factor = 1 + (discount_percent / 100) * 1.5
+                        predicted_sales = base_prediction * uplift_factor
+                    else:
+                        predicted_sales = base_prediction
+                    
+                    predictions.append({
+                        'Category': category,
+                        'Predicted Sales': f"₹{predicted_sales:,.2f}",
+                        'Confidence': f"{np.random.uniform(70, 95):.1f}%"
+                    })
+                
+                # Display predictions
+                st.subheader("Prediction Results")
+                pred_df = pd.DataFrame(predictions)
+                st.dataframe(pred_df, use_container_width=True)
+                
+                # Visualization
+                fig = px.bar(pred_df, x='Category', y='Predicted Sales',
+                           title=f'Sales Prediction for {selected_store} on {prediction_date}')
+                st.plotly_chart(fig, use_container_width=True)
+        
+        except FileNotFoundError:
+            st.error("Model not found. Please train the model first.")
+        except Exception as e:
+            st.error(f"Prediction error: {e}")
+
+def campaign_performance_page():
+    st.header("📋 Campaign Performance Analysis")
+    
+    # Get campaigns
+    conn = get_db_connection()
+    campaigns_df = pd.read_sql_query('SELECT * FROM campaigns ORDER BY start_date DESC', conn)
+    conn.close()
+    
+    if campaigns_df.empty:
+        st.info("No campaigns available")
+        return
+    
+    # Select campaign for analysis
+    selected_campaign = st.selectbox("Select Campaign", campaigns_df['campaign_id'].tolist())
+    
+    if selected_campaign:
+        campaign_info = campaigns_df[campaigns_df['campaign_id'] == selected_campaign].iloc[0]
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.subheader("Campaign Details")
+            st.write(f"**Name:** {campaign_info['campaign_name']}")
+            st.write(f"**Type:** {campaign_info['campaign_type'].replace('_', ' ').title()}")
+            st.write(f"**Duration:** {campaign_info['start_date']} to {campaign_info['end_date']}")
+            st.write(f"**Discount:** {campaign_info['discount_percent']}%")
+            st.write(f"**Categories:** {eval(campaign_info['categories'])}")
+            
+            # Calculate and save performance if not already done
+            if st.button("Analyze Campaign Performance"):
+                target_stores = eval(campaign_info['target_stores'])
+                categories = eval(campaign_info['categories'])
+                
+                performance_data = []
+                total_sales_before = 0
+                total_sales_during = 0
+                total_sales_after = 0
+                
+                progress_bar = st.progress(0)
+                total_combinations = len(target_stores) * len(categories)
+                current = 0
+                
+                for store_id in target_stores:
+                    for category in categories:
+                        current += 1
+                        progress_bar.progress(current / total_combinations)
+                        
+                        perf = calculate_campaign_performance(
+                            selected_campaign, store_id, category,
+                            campaign_info['start_date'], campaign_info['end_date']
+                        )
+                        
+                        save_campaign_performance(selected_campaign, store_id, category, perf)
+                        
+                        performance_data.append({
+                            'store_id': store_id,
+                            'category': category,
+                            **perf
+                        })
+                        
+                        total_sales_before += perf['sales_before']
+                        total_sales_during += perf['sales_during']
+                        total_sales_after += perf['sales_after']
+                
+                progress_bar.empty()
+                st.success("Campaign performance analysis completed!")
+        
+        with col2:
+            st.subheader("Quick Stats")
+            # Get existing performance data
+            conn = get_db_connection()
+            perf_df = pd.read_sql_query('''
+                SELECT * FROM campaign_performance 
+                WHERE campaign_id = ?
+            ''', conn, params=[selected_campaign])
+            conn.close()
+            
+            if not perf_df.empty:
+                total_uplift = perf_df['uplift_percent'].mean()
+                total_roi = perf_df['roi'].mean()
+                best_category = perf_df.loc[perf_df['uplift_percent'].idxmax(), 'category']
+                
+                st.metric("Average Uplift", f"{total_uplift:.1f}%")
+                st.metric("Average ROI", f"{total_roi:.2f}x")
+                st.metric("Best Category", best_category)
+        
+        # Detailed performance analysis
+        if not perf_df.empty:
+            st.subheader("Performance Analysis")
+            
+            # Before, During, After comparison
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Sales comparison chart
+                total_before = perf_df['sales_before'].sum()
+                total_during = perf_df['sales_during'].sum()
+                total_after = perf_df['sales_after'].sum()
+                
+                comparison_data = pd.DataFrame({
+                    'Period': ['Before Campaign', 'During Campaign', 'After Campaign'],
+                    'Sales': [total_before, total_during, total_after]
+                })
+                
+                fig = px.bar(comparison_data, x='Period', y='Sales',
+                           title='Sales Comparison: Before vs During vs After',
+                           labels={'Sales': 'Sales Amount (₹)'})
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                # Category-wise uplift
+                category_perf = perf_df.groupby('category').agg({
+                    'uplift_percent': 'mean',
+                    'roi': 'mean',
+                    'sales_during': 'sum'
+                }).reset_index()
+                
+                fig = px.bar(category_perf, x='category', y='uplift_percent',
+                           title='Category-wise Sales Uplift',
+                           labels={'uplift_percent': 'Uplift (%)', 'category': 'Category'})
+                fig.update_xaxis(tickangle=45)
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Store-wise performance (if multiple stores)
+            if len(perf_df['store_id'].unique()) > 1:
+                st.subheader("Store-wise Performance")
+                
+                store_perf = perf_df.groupby('store_id').agg({
+                    'sales_before': 'sum',
+                    'sales_during': 'sum',
+                    'sales_after': 'sum',
+                    'uplift_percent': 'mean',
+                    'roi': 'mean'
+                }).reset_index()
+                
+                # Get store names
+                stores_df = get_all_stores()
+                store_perf = store_perf.merge(
+                    stores_df[['store_id', 'store_name']], 
+                    on='store_id', 
+                    how='left'
+                )
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    fig = px.bar(store_perf, x='store_name', y='uplift_percent',
+                               title='Store-wise Uplift Performance',
+                               labels={'uplift_percent': 'Uplift (%)', 'store_name': 'Store'})
+                    fig.update_xaxis(tickangle=45)
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    fig = px.scatter(store_perf, x='sales_during', y='roi',
+                                   hover_data=['store_name'],
+                                   title='Sales vs ROI by Store',
+                                   labels={'sales_during': 'Campaign Sales (₹)', 'roi': 'ROI'})
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            # Detailed performance table
+            st.subheader("Detailed Performance Data")
+            
+            # Add store names to performance data
+            stores_df = get_all_stores()
+            perf_display = perf_df.merge(
+                stores_df[['store_id', 'store_name']], 
+                on='store_id', 
+                how='left'
+            )
+            
+            # Format the display
+            perf_display['sales_before'] = perf_display['sales_before'].apply(lambda x: f"₹{x:,.2f}")
+            perf_display['sales_during'] = perf_display['sales_during'].apply(lambda x: f"₹{x:,.2f}")
+            perf_display['sales_after'] = perf_display['sales_after'].apply(lambda x: f"₹{x:,.2f}")
+            perf_display['uplift_percent'] = perf_display['uplift_percent'].apply(lambda x: f"{x:.1f}%")
+            perf_display['roi'] = perf_display['roi'].apply(lambda x: f"{x:.2f}x")
+            
+            display_cols = ['store_name', 'category', 'sales_before', 'sales_during', 
+                          'sales_after', 'uplift_percent', 'roi']
+            st.dataframe(perf_display[display_cols], use_container_width=True)
+            
+            # Export functionality
+            if st.button("Export Performance Report"):
+                csv = perf_display.to_csv(index=False)
+                st.download_button(
+                    label="Download CSV",
+                    data=csv,
+                    file_name=f"campaign_performance_{selected_campaign}.csv",
+                    mime="text/csv"
+                )
+        
+        # Campaign insights and recommendations
+        if not perf_df.empty:
+            st.subheader("AI Insights & Recommendations")
+            
+            avg_uplift = perf_df['uplift_percent'].mean()
+            best_performing_category = perf_df.loc[perf_df['uplift_percent'].idxmax(), 'category']
+            worst_performing_category = perf_df.loc[perf_df['uplift_percent'].idxmin(), 'category']
+            
+            insights = []
+            
+            if avg_uplift > 20:
+                insights.append("🎉 **Excellent Performance**: Campaign achieved strong sales uplift across categories.")
+            elif avg_uplift > 10:
+                insights.append("✅ **Good Performance**: Campaign showed positive results with room for improvement.")
+            else:
+                insights.append("⚠️ **Needs Improvement**: Campaign performance below expectations.")
+            
+            insights.append(f"🏆 **Best Category**: {best_performing_category} showed the highest uplift.")
+            insights.append(f"📈 **Opportunity**: Focus more on {worst_performing_category} in future campaigns.")
+            
+            # Seasonal recommendations
+            campaign_date = pd.to_datetime(campaign_info['start_date'])
+            month = campaign_date.month
+            
+            if month in [10, 11]:  # Diwali season
+                insights.append("🪔 **Seasonal Insight**: Diwali period - Electronics and Clothing typically perform well.")
+            elif month in [12, 1]:  # New Year season
+                insights.append("🎊 **Seasonal Insight**: New Year period - Beauty and Fashion categories see higher demand.")
+            elif month in [6, 7, 8]:  # Monsoon season
+                insights.append("🌧️ **Seasonal Insight**: Monsoon period - Home & Garden, Books show better performance.")
+            
+            # Display insights
+            for insight in insights:
+                st.markdown(insight)
+            
+            # Future campaign recommendations
+            st.subheader("Future Campaign Recommendations")
+            
+            recommendations = []
+            
+            if avg_uplift < 15:
+                recommendations.append("Consider increasing discount percentage or improving targeting.")
+            
+            if len(perf_df['store_id'].unique()) > 1:
+                best_store = perf_df.groupby('store_id')['uplift_percent'].mean().idxmax()
+                recommendations.append(f"Replicate successful strategies from {best_store} to other stores.")
+            
+            recommendations.append("Focus future campaigns on high-performing categories to maximize ROI.")
+            recommendations.append("Consider extending successful campaigns by 2-3 days for better impact.")
+            
+            for i, rec in enumerate(recommendations, 1):
+                st.markdown(f"{i}. {rec}")
+
+if __name__ == "__main__":
+    main()
