@@ -4,3 +4,4 @@ openpyxl
 reportlab
 xlsxwriter
 plotly
+scikit-learn
