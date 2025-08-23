@@ -166,6 +166,9 @@ CAMPAIGN_TYPES = ['Bundle Offer', 'Loyalty Program']
 def add_store(store_name):
     try:
         stores_df = load_data('stores')
+        if not store_name or pd.isna(store_name):
+            st.error("Store name cannot be empty or None")
+            return False
         if store_name not in stores_df['store_name'].values:
             new_store = pd.DataFrame({
                 'store_name': [store_name],
@@ -248,8 +251,8 @@ def add_daily_sales(date, store_name, category, product_name, sales_amount):
     if not product_name:
         st.error("Product name cannot be empty")
         return False
-    if not store_name:
-        st.error("Store name cannot be empty")
+    if not store_name or pd.isna(store_name):
+        st.error("Store name cannot be empty or None")
         return False
     if product_name not in PRODUCTS_BY_CATEGORY.get(category, []) and product_name != "Other (Custom)":
         st.warning(f"Product {product_name} not in predefined list for {category}. Adding as custom.")
@@ -414,7 +417,7 @@ def daily_sales_page():
     with col1:
         st.subheader("Add Sales Data")
         with st.form("sales_entry_form"):
-            date = st.date_input("Date", value=datetime(2025, 8, 23, 15, 51))  # Set to 03:51 PM IST, Aug 23, 2025
+            date = st.date_input("Date", value=datetime(2025, 8, 23, 16, 9))  # 04:09 PM IST, Aug 23, 2025
             store_name = st.selectbox("Store Name", stores_df['store_name'].tolist())
             category = st.selectbox("Category", ITEM_CATEGORIES)
             if category:
@@ -447,6 +450,9 @@ def daily_sales_page():
                     if df.empty:
                         st.error("No valid dates found in CSV. Ensure 'date' column uses YYYY-MM-DD format.")
                         return
+                    # Ensure store_name is not None or empty
+                    df['store_name'] = df['store_name'].fillna('Unknown Store').astype(str)
+                    df = df[df['store_name'].str.strip() != '']
                     df['category'] = df['category'].apply(lambda x: x if x in ITEM_CATEGORIES else 'OTHERS')
                     df['sales_amount'] = pd.to_numeric(df['sales_amount'], errors='coerce').fillna(0)
                     df = df[df['sales_amount'] >= 0]
@@ -511,9 +517,9 @@ def sales_analysis_page():
     with col2:
         selected_category = st.selectbox("Select Category", ["All"] + ITEM_CATEGORIES)
     with col3:
-        start_date = st.date_input("Start Date", value=datetime(2025, 8, 23, 15, 51) - timedelta(days=30))
+        start_date = st.date_input("Start Date", value=datetime(2025, 8, 23, 16, 9) - timedelta(days=30))
     with col4:
-        end_date = st.date_input("End Date", value=datetime(2025, 8, 23, 15, 51))
+        end_date = st.date_input("End Date", value=datetime(2025, 8, 23, 16, 9))
     if selected_store:
         store_filter = None if selected_store == "All" else selected_store
         category_filter = None if selected_category == "All" else selected_category
@@ -594,7 +600,7 @@ def ai_predictions_page():
                 store_options = ['All Stores'] + stores_df['store_name'].tolist()
                 selected_stores = st.multiselect("Stores", store_options, default=['All Stores'])
                 selected_categories = st.multiselect("Categories", ITEM_CATEGORIES)
-                prediction_date = st.date_input("Prediction Date", value=datetime(2025, 8, 23, 15, 51) + timedelta(days=1))
+                prediction_date = st.date_input("Prediction Date", value=datetime(2025, 8, 23, 16, 9) + timedelta(days=1))
             with colB:
                 campaigns_df = load_data('campaigns')
                 campaign_options = ['None'] + campaigns_df['campaign_name'].tolist()
@@ -684,9 +690,9 @@ def campaign_analysis_page():
         campaign_name = st.text_input("Campaign Name", placeholder="e.g., Summer Bundle 2025")
         col1, col2 = st.columns(2)
         with col1:
-            start_date = st.date_input("Start Date", value=datetime(2025, 8, 23, 15, 51))
+            start_date = st.date_input("Start Date", value=datetime(2025, 8, 23, 16, 9))
         with col2:
-            end_date = st.date_input("End Date", value=datetime(2025, 8, 23, 15, 51) + timedelta(days=7))
+            end_date = st.date_input("End Date", value=datetime(2025, 8, 23, 16, 9) + timedelta(days=7))
         campaign_type = st.selectbox("Campaign Type", CAMPAIGN_TYPES)
         store_options = ['All Stores'] + stores_df['store_name'].tolist()
         target_stores = st.multiselect("Target Stores", store_options, default=['All Stores'])
