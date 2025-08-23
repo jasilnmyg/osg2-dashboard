@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
 import pickle
 from datetime import datetime, timedelta
 import re
@@ -35,7 +36,7 @@ def init_csv_files():
         'stores': ['store_id', 'store_name', 'created_date'],
         'daily_sales': ['id', 'date', 'store_id', 'category', 'product_name', 'sales_amount'],
         'campaigns': ['campaign_id', 'campaign_name', 'start_date', 'end_date', 'campaign_type', 
-                     'target_stores', 'offer_products', 'offer_description', 'created_date'],
+                     'target_stores', 'offer_products', 'offer_description', 'discount_percent', 'created_date'],
         'campaign_performance': ['id', 'campaign_id', 'store_id', 'product_name', 'category', 
                                 'sales_before', 'sales_during', 'sales_after', 'units_before', 
                                 'units_during', 'units_after', 'uplift_percent', 'units_uplift_percent']
@@ -52,6 +53,13 @@ def load_data(table_name):
     try:
         local_path = CSV_FILES[table_name]
         df = pd.read_csv(local_path)
+        if table_name == 'daily_sales' or table_name == 'campaigns':
+            # Validate date columns
+            date_cols = ['date'] if table_name == 'daily_sales' else ['start_date', 'end_date']
+            for col in date_cols:
+                df = df[df[col].apply(lambda x: is_valid_date(str(x)))]
+            if df.empty and not pd.read_csv(local_path).empty:
+                st.warning(f"Removed invalid date entries from {table_name}.csv. Please ensure '{col}' contains valid dates (e.g., YYYY-MM-DD).")
         return df
     except FileNotFoundError:
         init_csv_files()
@@ -66,6 +74,13 @@ def save_data(df, table_name):
         df.to_csv(local_path, index=False)
     except Exception as e:
         st.error(f"Error saving {table_name} data: {e}")
+
+def is_valid_date(date_str):
+    try:
+        pd.to_datetime(date_str, format='mixed', dayfirst=True)
+        return True
+    except (ValueError, TypeError):
+        return False
 
 # -------------------------------
 # Helpers: ID generation
@@ -91,6 +106,18 @@ def generate_store_id_from_name(name: str) -> str:
         store_id = f"{base}-{i}"
     return store_id
 
+def generate_campaign_id(name: str) -> str:
+    base = slugify(name)
+    if not base:
+        base = 'campaign'
+    campaign_id = base
+    i = 1
+    campaigns_df = load_data('campaigns')
+    while campaign_id in campaigns_df['campaign_id'].values:
+        i += 1
+        campaign_id = f"{base}-{i}"
+    return campaign_id
+
 # -------------------------------
 # App Config & Constants
 # -------------------------------
@@ -101,12 +128,11 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Categories from the uploaded file
+# Categories and products
 ITEM_CATEGORIES = [
     'CONSUMER ELECTRONICS', 'OTHERS', 'ACCESSORIES', 'DIGITAL ELECTRONICS'
 ]
 
-# Products by category from the uploaded file, including GLASSWARE and other missing products
 PRODUCTS_BY_CATEGORY = {
     'CONSUMER ELECTRONICS': [
         'CHOPPER', 'REFRIGERATOR-FF', 'REFRIGERATOR-SBS', 'REFRIGERATOR-SD',
@@ -127,6 +153,8 @@ PRODUCTS_BY_CATEGORY = {
         'MOBILE FEATURE PHONE'
     ]
 }
+
+CAMPAIGN_TYPES = ['Discount', 'BOGO', 'Bundle Offer', 'Loyalty Program']
 
 # -------------------------------
 # Helpers (Data access)
@@ -182,10 +210,36 @@ def import_stores_from_csv(csv_file):
     except Exception as e:
         return 0, [f"Error reading CSV: {e}"]
 
+def add_campaign(campaign_name, start_date, end_date, campaign_type, target_stores, offer_products, offer_description, discount_percent):
+    try:
+        campaigns_df = load_data('campaigns')
+        campaign_id = generate_campaign_id(campaign_name)
+        new_campaign = pd.DataFrame({
+            'campaign_id': [campaign_id],
+            'campaign_name': [campaign_name],
+            'start_date': [start_date.strftime('%Y-%m-%d')],
+            'end_date': [end_date.strftime('%Y-%m-%d')],
+            'campaign_type': [campaign_type],
+            'target_stores': [','.join(target_stores) if isinstance(target_stores, list) else target_stores],
+            'offer_products': [','.join(offer_products) if isinstance(offer_products, list) else offer_products],
+            'offer_description': [offer_description],
+            'discount_percent': [discount_percent],
+            'created_date': [datetime.now().date()]
+        })
+        campaigns_df = pd.concat([campaigns_df, new_campaign], ignore_index=True)
+        save_data(campaigns_df, 'campaigns')
+        return True
+    except Exception as e:
+        st.error(f"Error adding campaign: {e}")
+        return False
+
 # -------------------------------
 # Core: Sales & ML helpers
 # -------------------------------
 def add_daily_sales(date, store_id, category, product_name, sales_amount):
+    if not is_valid_date(date):
+        st.error(f"Invalid date format: {date}. Use YYYY-MM-DD (e.g., 2025-01-01).")
+        return False
     if not category or category not in ITEM_CATEGORIES:
         st.error(f"Invalid category: {category}. Choose from {ITEM_CATEGORIES}")
         return False
@@ -213,22 +267,39 @@ def add_daily_sales(date, store_id, category, product_name, sales_amount):
         st.error(f"Error adding sales data for {product_name}: {str(e)}")
         return False
 
-def get_sales_data(store_id=None, start_date=None, end_date=None, category=None, product_name=None):
+def get_sales_data(store_id=None, start_date=None, end_date=None, category=None, product_name=None, campaign_id=None):
     try:
         daily_sales_df = load_data('daily_sales')
         stores_df = load_data('stores')
+        campaigns_df = load_data('campaigns')
         if daily_sales_df.empty or stores_df.empty:
             return pd.DataFrame()
         df = daily_sales_df.merge(stores_df[['store_id', 'store_name']], on='store_id', how='left')
+        if campaign_id:
+            campaign = campaigns_df[campaigns_df['campaign_id'] == campaign_id]
+            if not campaign.empty:
+                start_date = pd.to_datetime(campaign['start_date'].iloc[0])
+                end_date = pd.to_datetime(campaign['end_date'].iloc[0])
+                target_stores = campaign['target_stores'].iloc[0].split(',') if campaign['target_stores'].iloc[0] else []
+                offer_products = campaign['offer_products'].iloc[0].split(',') if campaign['offer_products'].iloc[0] else []
+                df['date'] = pd.to_datetime(df['date'], format='mixed', dayfirst=True)
+                df = df[(df['date'] >= start_date) & (df['date'] <= end_date)]
+                if target_stores and 'All Stores' not in target_stores:
+                    df = df[df['store_id'].isin(target_stores)]
+                if offer_products:
+                    df = df[df['product_name'].isin(offer_products)]
         if store_id:
             if isinstance(store_id, list):
                 df = df[df['store_id'].isin(store_id)]
             else:
                 df = df[df['store_id'] == store_id]
-        if start_date:
-            df = df[pd.to_datetime(df['date']) >= pd.to_datetime(start_date)]
-        if end_date:
-            df = df[pd.to_datetime(df['date']) <= pd.to_datetime(end_date)]
+        if start_date and not campaign_id:
+            df['date'] = pd.to_datetime(df['date'], format='mixed', dayfirst=True)
+            df = df[df['date'] >= pd.to_datetime(start_date)]
+        if end_date and not campaign_id:
+            if 'date' not in df.columns or df['date'].isna().all():
+                return pd.DataFrame()
+            df = df[df['date'] <= pd.to_datetime(end_date)]
         if category:
             df = df[df['category'] == category]
         if product_name:
@@ -243,11 +314,24 @@ def get_sales_data(store_id=None, start_date=None, end_date=None, category=None,
         st.error(f"Error retrieving sales data: {e}")
         return pd.DataFrame()
 
-def create_prediction_model(data):
+def create_prediction_model(data, campaigns_df):
     if len(data) < 30:
         return None, None, "Insufficient data for training (minimum 30 records required)"
     data = data.copy()
-    data['date'] = pd.to_datetime(data['date'])
+    data['date'] = pd.to_datetime(data['date'], format='mixed', dayfirst=True)
+    campaigns_df['start_date'] = pd.to_datetime(campaigns_df['start_date'], format='mixed', dayfirst=True)
+    campaigns_df['end_date'] = pd.to_datetime(campaigns_df['end_date'], format='mixed', dayfirst=True)
+    data['campaign_active'] = 0
+    data['discount_percent'] = 0
+    for _, campaign in campaigns_df.iterrows():
+        mask = (data['date'] >= campaign['start_date']) & (data['date'] <= campaign['end_date'])
+        target_stores = campaign['target_stores'].split(',') if campaign['target_stores'] else []
+        if 'All Stores' in target_stores or not target_stores:
+            data.loc[mask, 'campaign_active'] = 1
+            data.loc[mask, 'discount_percent'] = campaign['discount_percent']
+        else:
+            data.loc[mask & data['store_id'].isin(target_stores), 'campaign_active'] = 1
+            data.loc[mask & data['store_id'].isin(target_stores), 'discount_percent'] = campaign['discount_percent']
     data['day_of_week'] = data['date'].dt.dayofweek
     data['month'] = data['date'].dt.month
     data['day_of_month'] = data['date'].dt.day
@@ -259,7 +343,8 @@ def create_prediction_model(data):
     data_encoded = pd.get_dummies(data, columns=['store_id', 'category'], prefix=['store', 'cat'])
     feature_cols = [col for col in data_encoded.columns if col.startswith(('store_', 'cat_')) or 
                     col in ['day_of_week', 'month', 'day_of_month', 'is_weekend', 
-                           'sales_lag_1', 'sales_lag_7', 'sales_rolling_7']]
+                            'sales_lag_1', 'sales_lag_7', 'sales_rolling_7', 
+                            'campaign_active', 'discount_percent']]
     data_clean = data_encoded.dropna()
     if len(data_clean) < 20:
         return None, None, "Insufficient clean data for training"
@@ -343,7 +428,8 @@ def daily_sales_page():
             sales_amount = st.number_input("Sales Amount (₹)", min_value=0.0, format="%.2f")
             if st.form_submit_button("Add Sales Data"):
                 if product_name and sales_amount >= 0 and category and store_id:
-                    if add_daily_sales(date, store_id, category, product_name, sales_amount):
+                    date_str = date.strftime('%Y-%m-%d')
+                    if add_daily_sales(date_str, store_id, category, product_name, sales_amount):
                         st.success(f"Sales data for {product_name} added successfully!")
                     else:
                         st.error(f"Failed to add sales data for {product_name}")
@@ -351,13 +437,17 @@ def daily_sales_page():
                     st.error("Please fill all required fields (Date, Store, Category, Product Name, Sales Amount)")
     with col2:
         st.subheader("Bulk Upload")
-        st.info("CSV format: date,store_id,category,product_name,sales_amount")
+        st.info("CSV format: date,store_id,category,product_name,sales_amount (date in YYYY-MM-DD)")
         uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
         if uploaded_file is not None:
             try:
                 df = pd.read_csv(uploaded_file)
                 required_cols = ['date', 'store_id', 'category', 'product_name', 'sales_amount']
                 if all(col in df.columns for col in required_cols):
+                    df = df[df['date'].apply(is_valid_date)]
+                    if df.empty:
+                        st.error("No valid dates found in CSV. Ensure 'date' column uses YYYY-MM-DD format.")
+                        return
                     df['category'] = df['category'].apply(lambda x: x if x in ITEM_CATEGORIES else 'OTHERS')
                     df['sales_amount'] = pd.to_numeric(df['sales_amount'], errors='coerce').fillna(0)
                     df = df[df['sales_amount'] >= 0]
@@ -399,7 +489,6 @@ def daily_sales_page():
     if not recent_sales.empty:
         display_cols = ['date', 'store_name', 'category', 'product_name', 'sales_amount']
         st.dataframe(recent_sales[display_cols].head(20), use_container_width=True)
-        # Add download button for recent sales data as CSV
         csv = recent_sales[display_cols].to_csv(index=False)
         st.download_button(
             label="Download Recent Sales Data as CSV",
@@ -460,7 +549,6 @@ def sales_analysis_page():
             st.subheader("Detailed Sales Data")
             display_cols = ['date', 'store_name', 'category', 'product_name', 'sales_amount']
             st.dataframe(sales_data[display_cols], use_container_width=True)
-            # Add download button for detailed sales data as CSV
             csv = sales_data[display_cols].to_csv(index=False)
             st.download_button(
                 label="Download Sales Data as CSV",
@@ -474,6 +562,7 @@ def sales_analysis_page():
 def ai_predictions_page():
     st.header("🤖 AI Sales Predictions")
     sales_data = get_sales_data()
+    campaigns_df = load_data('campaigns')
     if sales_data.empty:
         st.warning("No sales data available. Please add sales data first.")
         return
@@ -485,7 +574,7 @@ def ai_predictions_page():
     with col1:
         if st.button("Train AI Model", type="primary"):
             with st.spinner("Training AI model..."):
-                model, scaler, message = create_prediction_model(sales_data)
+                model, scaler, message = create_prediction_model(sales_data, campaigns_df)
                 if model is not None:
                     with open(MODEL_FILE, 'wb') as f:
                         pickle.dump((model, scaler), f)
@@ -494,7 +583,7 @@ def ai_predictions_page():
                 else:
                     st.error(message)
     with col2:
-        st.info("💡 The AI model analyzes historical sales patterns, seasonal trends, and campaign impacts to predict future sales.")
+        st.info("💡 The AI model analyzes historical sales, seasonal trends, and campaign impacts to predict future sales.")
     if 'model_trained' in st.session_state or os.path.exists(MODEL_FILE):
         st.subheader("Make Predictions")
         try:
@@ -503,80 +592,189 @@ def ai_predictions_page():
             colA, colB = st.columns(2)
             with colA:
                 stores_df = get_all_stores()
-                selected_store = st.selectbox("Store", stores_df['store_id'].tolist())
+                store_options = ['All Stores'] + stores_df['store_id'].tolist()
+                selected_stores = st.multiselect("Stores", store_options, default=['All Stores'])
                 selected_categories = st.multiselect("Categories", ITEM_CATEGORIES)
                 prediction_date = st.date_input("Prediction Date", 
                                                value=datetime.now().date() + timedelta(days=1))
             with colB:
-                campaign_active = st.checkbox("Campaign Active?")
+                campaigns_df = load_data('campaigns')
+                campaign_options = ['None'] + campaigns_df['campaign_name'].tolist()
+                selected_campaign = st.selectbox("Campaign (optional)", campaign_options)
+                campaign_active = selected_campaign != 'None'
+                discount_percent = 0
+                offer_products = []
                 if campaign_active:
-                    discount_percent = st.slider("Discount %", 0, 50, 20)
-                else:
-                    discount_percent = 0
+                    campaign = campaigns_df[campaigns_df['campaign_name'] == selected_campaign]
+                    if not campaign.empty:
+                        discount_percent = campaign['discount_percent'].iloc[0]
+                        offer_products = campaign['offer_products'].iloc[0].split(',') if campaign['offer_products'].iloc[0] else []
+                    else:
+                        discount_percent = st.slider("Discount %", 0, 50, 20)
             if st.button("Generate Prediction") and selected_categories:
                 predictions = []
                 pred_date = pd.to_datetime(prediction_date)
-                for category in selected_categories:
-                    features = {
-                        'day_of_week': pred_date.dayofweek,
-                        'month': pred_date.month,
-                        'day_of_month': pred_date.day,
-                        'is_weekend': int(pred_date.dayofweek >= 5),
-                        'campaign_active': int(campaign_active),
-                        'discount_percent': discount_percent
-                    }
-                    recent_sales = get_sales_data(selected_store, 
-                                                  (pred_date - timedelta(days=30)).strftime('%Y-%m-%d'),
-                                                  (pred_date - timedelta(days=1)).strftime('%Y-%m-%d'),
-                                                  category)
-                    if not recent_sales.empty:
-                        features['sales_lag_1'] = recent_sales['sales_amount'].iloc[-1] if len(recent_sales) > 0 else 0
-                        features['sales_lag_7'] = recent_sales['sales_amount'].iloc[-7] if len(recent_sales) > 6 else 0
-                        features['sales_rolling_7'] = recent_sales['sales_amount'].tail(7).mean()
-                    else:
-                        features.update({'sales_lag_1': 0, 'sales_lag_7': 0, 'sales_rolling_7': 0})
-                    feature_cols = sorted(list(set(features.keys()) | {'day_of_week', 'month', 'day_of_month', 'is_weekend', 'campaign_active', 'discount_percent', 'sales_lag_1', 'sales_lag_7', 'sales_rolling_7'}))
-                    vec = []
-                    for col in feature_cols:
-                        vec.append(features.get(col, 0))
-                    for cat in ITEM_CATEGORIES:
-                        vec.append(1 if cat == category else 0)
-                    for store in stores_df['store_id']:
-                        vec.append(1 if store == selected_store else 0)
-                    try:
-                        vec_scaled = scaler.transform([vec])
-                    except Exception:
-                        vec_scaled = [np.array(vec)]
-                    try:
-                        predicted = model.predict(vec_scaled)[0]
-                    except Exception:
-                        predicted = np.random.uniform(1000, 5000)
-                    if campaign_active:
-                        uplift_factor = 1 + (discount_percent / 100) * 1.5
-                        predicted *= uplift_factor
-                    predictions.append({
-                        'Category': category,
-                        'Predicted Sales': f"₹{predicted:,.2f}",
-                        'Confidence': f"{np.random.uniform(70, 95):.1f}%"
-                    })
+                target_stores = stores_df['store_id'].tolist() if 'All Stores' in selected_stores else selected_stores
+                for store_id in target_stores:
+                    for category in selected_categories:
+                        features = {
+                            'day_of_week': pred_date.dayofweek,
+                            'month': pred_date.month,
+                            'day_of_month': pred_date.day,
+                            'is_weekend': int(pred_date.dayofweek >= 5),
+                            'campaign_active': int(campaign_active),
+                            'discount_percent': discount_percent
+                        }
+                        recent_sales = get_sales_data(store_id, 
+                                                      (pred_date - timedelta(days=30)).strftime('%Y-%m-%d'),
+                                                      (pred_date - timedelta(days=1)).strftime('%Y-%m-%d'),
+                                                      category)
+                        if not recent_sales.empty:
+                            features['sales_lag_1'] = recent_sales['sales_amount'].iloc[-1] if len(recent_sales) > 0 else 0
+                            features['sales_lag_7'] = recent_sales['sales_amount'].iloc[-7] if len(recent_sales) > 6 else 0
+                            features['sales_rolling_7'] = recent_sales['sales_amount'].tail(7).mean()
+                        else:
+                            features.update({'sales_lag_1': 0, 'sales_lag_7': 0, 'sales_rolling_7': 0})
+                        feature_cols = sorted(list(set(features.keys()) | {'day_of_week', 'month', 'day_of_month', 'is_weekend', 'campaign_active', 'discount_percent', 'sales_lag_1', 'sales_lag_7', 'sales_rolling_7'}))
+                        vec = []
+                        for col in feature_cols:
+                            vec.append(features.get(col, 0))
+                        for cat in ITEM_CATEGORIES:
+                            vec.append(1 if cat == category else 0)
+                        for store in stores_df['store_id']:
+                            vec.append(1 if store == store_id else 0)
+                        try:
+                            vec_scaled = scaler.transform([vec])
+                        except Exception:
+                            vec_scaled = [np.array(vec)]
+                        try:
+                            predicted = model.predict(vec_scaled)[0]
+                        except Exception:
+                            predicted = np.random.uniform(1000, 5000)
+                        if campaign_active and offer_products:
+                            if any(product in offer_products for product in PRODUCTS_BY_CATEGORY.get(category, [])):
+                                uplift_factor = 1 + (discount_percent / 100) * 1.5
+                                predicted *= uplift_factor
+                        predictions.append({
+                            'Store': store_id,
+                            'Category': category,
+                            'Predicted Sales': f"₹{predicted:,.2f}",
+                            'Confidence': f"{np.random.uniform(70, 95):.1f}%"
+                        })
                 st.subheader("Prediction Results")
                 pred_df = pd.DataFrame(predictions)
                 st.dataframe(pred_df, use_container_width=True)
-                fig = px.bar(pred_df, x='Category', y='Predicted Sales',
-                             title=f'Sales Prediction for {selected_store} on {prediction_date}')
+                fig = px.bar(pred_df, x='Category', y='Predicted Sales', color='Store',
+                             title=f'Sales Prediction for {", ".join(target_stores)} on {prediction_date}')
                 st.plotly_chart(fig, use_container_width=True)
-                # Add download button for prediction results as CSV
                 csv = pred_df.to_csv(index=False)
                 st.download_button(
                     label="Download Prediction Results as CSV",
                     data=csv,
-                    file_name=f"predictions_{selected_store}_{prediction_date}.csv",
+                    file_name=f"predictions_{prediction_date}.csv",
                     mime="text/csv"
                 )
         except FileNotFoundError:
             st.error("Model not found. Please train the model first.")
         except Exception as e:
             st.error(f"Prediction error: {e}")
+
+def campaign_analysis_page():
+    st.header("🎯 Campaign Analysis")
+    stores_df = get_all_stores()
+    if stores_df.empty:
+        st.warning("Please add stores first in Store Management")
+        return
+    
+    st.subheader("Add New Campaign")
+    with st.form("add_campaign_form"):
+        campaign_name = st.text_input("Campaign Name", placeholder="e.g., Summer Sale 2025")
+        col1, col2 = st.columns(2)
+        with col1:
+            start_date = st.date_input("Start Date", value=datetime.now().date())
+        with col2:
+            end_date = st.date_input("End Date", value=datetime.now().date() + timedelta(days=7))
+        campaign_type = st.selectbox("Campaign Type", CAMPAIGN_TYPES)
+        store_options = ['All Stores'] + stores_df['store_id'].tolist()
+        target_stores = st.multiselect("Target Stores", store_options, default=['All Stores'])
+        category = st.selectbox("Category for Offer Products", ITEM_CATEGORIES)
+        offer_products = st.multiselect("Offer Products", PRODUCTS_BY_CATEGORY.get(category, []) + ["Other (Custom)"])
+        if "Other (Custom)" in offer_products:
+            custom_product = st.text_input("Enter Custom Product Name")
+            if custom_product:
+                offer_products = [p if p != "Other (Custom)" else custom_product for p in offer_products]
+        discount_percent = st.slider("Discount %", 0, 50, 20)
+        offer_description = st.text_area("Offer Description", placeholder="e.g., 20% off on all electronics")
+        if st.form_submit_button("Add Campaign"):
+            if campaign_name and start_date <= end_date and target_stores and offer_products:
+                if add_campaign(campaign_name, start_date, end_date, campaign_type, target_stores, 
+                                offer_products, offer_description, discount_percent):
+                    st.success(f"Campaign {campaign_name} added successfully!")
+                else:
+                    st.error("Error adding campaign")
+            else:
+                st.error("Please fill all required fields and ensure valid dates")
+
+    st.subheader("Campaign Sales Trend Analysis")
+    campaigns_df = load_data('campaigns')
+    if campaigns_df.empty:
+        st.warning("No campaigns available. Please add a campaign first.")
+        return
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        selected_campaign = st.selectbox("Select Campaign", campaigns_df['campaign_name'].tolist())
+    with col2:
+        selected_stores = st.multiselect("Select Stores", store_options, default=['All Stores'])
+    with col3:
+        campaign = campaigns_df[campaigns_df['campaign_name'] == selected_campaign]
+        offer_products = campaign['offer_products'].iloc[0].split(',') if not campaign.empty and campaign['offer_products'].iloc[0] else []
+        selected_products = st.multiselect("Select Offer Products", offer_products, default=offer_products)
+    
+    if selected_campaign:
+        campaign_id = campaign['campaign_id'].iloc[0] if not campaign.empty else None
+        target_stores = selected_stores if 'All Stores' not in selected_stores else None
+        sales_data = get_sales_data(store_id=target_stores, product_name=selected_products, campaign_id=campaign_id)
+        if not sales_data.empty:
+            colA, colB, colC = st.columns(3)
+            with colA:
+                total_sales = sales_data['sales_amount'].sum()
+                st.metric("Total Campaign Sales", f"₹{total_sales:,.2f}")
+            with colB:
+                daily_totals = sales_data.groupby('date')['sales_amount'].sum().rename('daily').reset_index()
+                avg_daily_sales = daily_totals['daily'].mean()
+                st.metric("Avg Daily Campaign Sales", f"₹{avg_daily_sales:,.2f}")
+            with colC:
+                unique_products = sales_data['product_name'].nunique()
+                st.metric("Products Sold", unique_products)
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                daily_sales = sales_data.groupby('date')['sales_amount'].sum().reset_index()
+                fig = px.line(daily_sales, x='date', y='sales_amount',
+                              title=f'Daily Sales Trend for {selected_campaign}',
+                              labels={'sales_amount': 'Sales Amount (₹)', 'date': 'Date'})
+                st.plotly_chart(fig, use_container_width=True)
+            with c2:
+                product_sales = sales_data.groupby('product_name')['sales_amount'].sum().reset_index()
+                product_sales = product_sales.sort_values('sales_amount', ascending=False)
+                fig = px.bar(product_sales, x='product_name', y='sales_amount',
+                             title='Product-wise Sales',
+                             labels={'sales_amount': 'Sales Amount (₹)', 'product_name': 'Product'})
+                fig.update_xaxis(tickangle=45)
+                st.plotly_chart(fig, use_container_width=True)
+            
+            st.subheader("Detailed Campaign Sales Data")
+            display_cols = ['date', 'store_name', 'category', 'product_name', 'sales_amount']
+            st.dataframe(sales_data[display_cols], use_container_width=True)
+            csv = sales_data[display_cols].to_csv(index=False)
+            st.download_button(
+                label="Download Campaign Sales Data as CSV",
+                data=csv,
+                file_name=f"campaign_sales_{selected_campaign}.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("No sales data available for the selected campaign and filters")
 
 def main():
     if 'csv_initialized' not in st.session_state:
@@ -588,7 +786,8 @@ def main():
         "🏪 Store Management",
         "📊 Daily Sales Entry",
         "📈 Sales Analysis",
-        "🤖 AI Predictions"
+        "🤖 AI Predictions",
+        "🎯 Campaign Analysis"
     ])
     if page == "🏪 Store Management":
         store_management_page()
@@ -598,6 +797,8 @@ def main():
         sales_analysis_page()
     elif page == "🤖 AI Predictions":
         ai_predictions_page()
+    elif page == "🎯 Campaign Analysis":
+        campaign_analysis_page()
 
 if __name__ == "__main__":
     main()
