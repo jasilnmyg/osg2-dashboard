@@ -11,7 +11,6 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 import warnings
 import os
-from io import BytesIO
 
 warnings.filterwarnings('ignore')
 
@@ -58,21 +57,6 @@ def save_data(df, table_name):
         df.to_csv(CSV_FILES[table_name], index=False)
     except Exception as e:
         st.error(f"Error saving {table_name} data: {e}")
-
-def export_to_excel():
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        for table_name in CSV_FILES:
-            df = load_data(table_name)
-            # Split large datasets into multiple sheets if exceeding 1 million rows
-            if len(df) > 1000000:
-                for i in range(0, len(df), 1000000):
-                    sheet_name = f"{table_name}_{i//1000000 + 1}"
-                    df[i:i+1000000].to_excel(writer, sheet_name=sheet_name, index=False)
-            else:
-                df.to_excel(writer, sheet_name=table_name, index=False)
-    output.seek(0)
-    return output
 
 # -------------------------------
 # Helpers: ID generation
@@ -177,11 +161,11 @@ def get_all_stores():
         stores_df = stores_df.sort_values('store_name')
     return stores_df
 
-def import_stores_from_excel(excel_file):
+def import_stores_from_csv(csv_file):
     try:
-        df = pd.read_excel(excel_file)
+        df = pd.read_csv(csv_file)
         if df.empty:
-            return 0, ["Excel file is empty."]
+            return 0, ["CSV file is empty."]
         df_cols = [str(c).strip() for c in df.columns]
         store_name_idx = None
         for i, col in enumerate(df_cols):
@@ -189,7 +173,7 @@ def import_stores_from_excel(excel_file):
                 store_name_idx = i
                 break
         if store_name_idx is None:
-            return 0, ["Excel must contain a column named 'Store' (case-insensitive)."]
+            return 0, ["CSV must contain a column named 'Store' (case-insensitive)."]
         imported = 0
         errors = []
         stores_df = load_data('stores')
@@ -205,7 +189,7 @@ def import_stores_from_excel(excel_file):
                 errors.append(f"Failed to add store {store_id} - {store_name}")
         return imported, errors
     except Exception as e:
-        return 0, [f"Error reading Excel: {e}"]
+        return 0, [f"Error reading CSV: {e}"]
 
 # -------------------------------
 # Core: Sales & ML helpers
@@ -331,11 +315,11 @@ def store_management_page():
                 else:
                     st.error("Please fill the Store field")
     with col2:
-        st.subheader("Import Stores from Excel")
-        uploaded_file = st.file_uploader("Upload Excel (column: Store)", type=["xlsx", "xls"])
+        st.subheader("Import Stores from CSV")
+        uploaded_file = st.file_uploader("Upload CSV (column: Store)", type=["csv"])
         if uploaded_file is not None:
-            count, errors = import_stores_from_excel(uploaded_file)
-            st.success(f"Imported {count} stores from Excel")
+            count, errors = import_stores_from_csv(uploaded_file)
+            st.success(f"Imported {count} stores from CSV")
             if errors:
                 for err in errors[:5]:
                     st.warning(err)
@@ -538,6 +522,14 @@ def sales_analysis_page():
             st.plotly_chart(fig, use_container_width=True)
             st.subheader("Detailed Sales Data")
             st.dataframe(sales_data, use_container_width=True)
+            # Add download button for detailed sales data as CSV
+            csv = sales_data.to_csv(index=False)
+            st.download_button(
+                label="Download Sales Data as CSV",
+                data=csv,
+                file_name="sales_data_filtered.csv",
+                mime="text/csv"
+            )
         else:
             st.info("No sales data available for the selected filters")
 
@@ -635,6 +627,14 @@ def ai_predictions_page():
                 fig = px.bar(pred_df, x='Category', y='Predicted Sales',
                              title=f'Sales Prediction for {selected_store} on {prediction_date}')
                 st.plotly_chart(fig, use_container_width=True)
+                # Add download button for prediction results as CSV
+                csv = pred_df.to_csv(index=False)
+                st.download_button(
+                    label="Download Prediction Results as CSV",
+                    data=csv,
+                    file_name=f"predictions_{selected_store}_{prediction_date}.csv",
+                    mime="text/csv"
+                )
         except FileNotFoundError:
             st.error("Model not found. Please train the model first.")
         except Exception as e:
@@ -684,14 +684,14 @@ def campaign_performance_page():
             display_cols = ['store_name', 'category', 'product_name', 'sales_before', 'sales_during', 'sales_after', 'uplift_percent', 'roi']
             st.subheader("Detailed Performance Data")
             st.dataframe(perf_display[display_cols], use_container_width=True)
-            if st.button("Export Performance Report"):
-                csv = perf_display[display_cols].to_csv(index=False)
-                st.download_button(
-                    label="Download CSV",
-                    data=csv,
-                    file_name=f"campaign_performance_{selected_campaign}.csv",
-                    mime="text/csv"
-                )
+            # Add download button for performance data as CSV
+            csv = perf_display[display_cols].to_csv(index=False)
+            st.download_button(
+                label="Download Performance Report as CSV",
+                data=csv,
+                file_name=f"campaign_performance_{selected_campaign}.csv",
+                mime="text/csv"
+            )
         if not perf_df.empty:
             st.subheader("AI Insights & Recommendations")
             avg_uplift = perf_df['uplift_percent'].mean()
@@ -741,11 +741,11 @@ def daily_sales_page():
                     st.error("Please fill all required fields (Date, Store, Category, Product Name, Sales Amount)")
     with col2:
         st.subheader("Bulk Upload")
-        st.info("Excel format: date, store_id, category, product_name, sales_amount, units_sold")
-        uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx", "xls"])
+        st.info("CSV format: date,store_id,category,product_name,sales_amount,units_sold")
+        uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
         if uploaded_file is not None:
             try:
-                df = pd.read_excel(uploaded_file)
+                df = pd.read_csv(uploaded_file)
                 required_cols = ['date', 'store_id', 'category', 'product_name', 'sales_amount']
                 if all(col in df.columns for col in required_cols):
                     df['category'] = df['category'].apply(lambda x: x if x in ITEM_CATEGORIES else 'OTHERS')
@@ -784,7 +784,7 @@ def daily_sales_page():
                             if len(errors) > 5:
                                 st.error(f"...and {len(errors)-5} more errors")
                 else:
-                    st.error(f"Excel must contain columns: {required_cols}")
+                    st.error(f"CSV must contain columns: {required_cols}")
             except Exception as e:
                 st.error(f"Error reading or processing file: {e}")
     st.subheader("Recent Sales Data")
@@ -792,6 +792,14 @@ def daily_sales_page():
     if not recent_sales.empty:
         display_cols = ['date', 'store_name', 'category', 'product_name', 'sales_amount', 'units_sold']
         st.dataframe(recent_sales[display_cols].head(20), use_container_width=True)
+        # Add download button for recent sales data as CSV
+        csv = recent_sales[display_cols].to_csv(index=False)
+        st.download_button(
+            label="Download Recent Sales Data as CSV",
+            data=csv,
+            file_name="recent_sales_data.csv",
+            mime="text/csv"
+        )
     else:
         st.info("No sales data available")
 
@@ -807,8 +815,7 @@ def main():
         "🎯 Campaign Management",
         "📈 Sales Analysis",
         "🤖 AI Predictions",
-        "📋 Campaign Performance",
-        "💾 Export Data"
+        "📋 Campaign Performance"
     ])
     if page == "🏪 Store Management":
         store_management_page()
@@ -822,17 +829,6 @@ def main():
         ai_predictions_page()
     elif page == "📋 Campaign Performance":
         campaign_performance_page()
-    elif page == "💾 Export Data":
-        st.header("💾 Export Data to Excel")
-        st.write("Download all data as an Excel file. Large datasets will be split into multiple sheets if necessary.")
-        if st.button("Export All Data"):
-            excel_data = export_to_excel()
-            st.download_button(
-                label="Download Excel File",
-                data=excel_data,
-                file_name="sales_campaign_data.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
 
 if __name__ == "__main__":
     main()
