@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -265,6 +266,12 @@ def add_campaign(campaign_name, start_date, end_date, campaign_type, target_stor
 # Core: Sales & ML helpers
 # -------------------------------
 def add_daily_sales(date, store_name, category, product_name, sales_amount):
+    if 'sales_form_submitted' not in st.session_state:
+        st.session_state['sales_form_submitted'] = False
+    
+    if st.session_state['sales_form_submitted']:
+        return False  # Prevent reprocessing if already submitted
+    
     try:
         # Validate inputs
         if not is_valid_date(date):
@@ -300,7 +307,19 @@ def add_daily_sales(date, store_name, category, product_name, sales_amount):
         
         # Add sales record
         daily_sales_df = load_data('daily_sales')
-        new_id = int(daily_sales_df['id'].max()) + 1 if not daily_sales_df.empty and not daily_sales_df['id'].isna().all() else 1
+        new_id = int(daily_sales_df['id'].max()) + 1 if not daily_sales_df.empty and pd.notna(daily_sales_df['id']).any() else 1
+        
+        # Check for duplicate entry (same date, store, category, product, amount)
+        duplicate_check = daily_sales_df[
+            (daily_sales_df['date'] == date) &
+            (daily_sales_df['store_name'] == str(store_name).strip()) &
+            (daily_sales_df['category'] == category) &
+            (daily_sales_df['product_name'] == str(product_name).strip()) &
+            (daily_sales_df['sales_amount'] == sales_amount)
+        ]
+        if not duplicate_check.empty:
+            st.warning("Duplicate sales entry detected. Skipping addition.")
+            return False
         
         new_sale = pd.DataFrame({
             'id': [new_id],
@@ -313,6 +332,9 @@ def add_daily_sales(date, store_name, category, product_name, sales_amount):
         
         daily_sales_df = pd.concat([daily_sales_df, new_sale], ignore_index=True)
         save_data(daily_sales_df, 'daily_sales')
+        
+        # Mark form as submitted
+        st.session_state['sales_form_submitted'] = True
         return True
         
     except Exception as e:
@@ -330,7 +352,6 @@ def get_sales_data(store_name=None, start_date=None, end_date=None, category=Non
         # Fix None values in store_name column
         if 'store_name' in df.columns:
             df['store_name'] = df['store_name'].fillna('Unknown Store').astype(str)
-            # Remove rows where store_name is actually 'None' string
             df = df[df['store_name'] != 'None']
         
         # Convert date column safely
@@ -582,6 +603,7 @@ def daily_sales_page():
                     date_str = date.strftime('%Y-%m-%d')
                     if add_daily_sales(date_str, store_name, category, product_name, sales_amount):
                         st.success(f"Sales data added successfully for {product_name}!")
+                        st.session_state['sales_form_submitted'] = False
                         st.rerun()
                 else:
                     st.error("Please fill all required fields with valid data")
@@ -591,7 +613,11 @@ def daily_sales_page():
         st.info("CSV format: date,store_name,category,product_name,sales_amount")
         st.caption("Date format: YYYY-MM-DD")
         
-        uploaded_file = st.file_uploader("Upload Sales CSV", type=["csv"], key="sales_upload")
+        # Generate a unique key for the uploader
+        if 'sales_upload_key' not in st.session_state:
+            st.session_state['sales_upload_key'] = f"sales_upload_{datetime.now().timestamp()}"
+        
+        uploaded_file = st.file_uploader("Upload Sales CSV", type=["csv"], key=st.session_state['sales_upload_key'])
         
         if uploaded_file is not None:
             try:
@@ -661,6 +687,8 @@ def daily_sales_page():
                         status_text.empty()
                         
                         st.success(f"Import completed! Success: {success_count}, Errors: {error_count}")
+                        # Reset uploader key to clear the file
+                        st.session_state['sales_upload_key'] = f"sales_upload_{datetime.now().timestamp()}"
                         if success_count > 0:
                             st.rerun()
                 else:
@@ -668,7 +696,93 @@ def daily_sales_page():
             except Exception as e:
                 st.error(f"Error processing file: {e}")
     
-    # Display recent sales with error handling
+    # Delete Sales Data Section
+    st.divider()
+    st.subheader("🗑️ Delete Sales Data")
+    
+    # Load and display sales data for deletion
+    sales_data = get_sales_data()
+    if sales_data.empty:
+        st.info("No sales data available to delete.")
+        return
+    
+    # Ensure 'id' column is numeric and handle missing/invalid IDs
+    sales_data['id'] = pd.to_numeric(sales_data['id'], errors='coerce')
+    sales_data = sales_data.dropna(subset=['id'])
+    sales_data['id'] = sales_data['id'].astype(int)
+    
+    # Filter options for easier selection
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        store_filter = st.selectbox("Filter by Store", ["All"] + stores_df['store_name'].tolist(), key="delete_store_filter")
+    with col2:
+        date_filter = st.date_input("Filter by Date", value=None, key="delete_date_filter")
+    with col3:
+        category_filter = st.selectbox("Filter by Category", ["All"] + ITEM_CATEGORIES, key="delete_category_filter")
+    
+    # Apply filters
+    filtered_sales = sales_data.copy()
+    if store_filter != "All":
+        filtered_sales = filtered_sales[filtered_sales['store_name'] == store_filter]
+    if date_filter:
+        filtered_sales = filtered_sales[filtered_sales['date'] == date_filter.strftime('%Y-%m-%d')]
+    if category_filter != "All":
+        filtered_sales = filtered_sales[filtered_sales['category'] == category_filter]
+    
+    if filtered_sales.empty:
+        st.info("No sales data matches the selected filters.")
+        return
+    
+    # Display sales data with selection for deletion
+    st.write("Select sales records to delete:")
+    with st.form("delete_sales_form"):
+        selected_ids = []
+        for idx, row in filtered_sales.iterrows():
+            cols = st.columns([1, 2, 2, 2, 2, 1])
+            with cols[0]:
+                if st.checkbox(f"ID: {row['id']}", key=f"delete_{row['id']}"):
+                    selected_ids.append(row['id'])
+            with cols[1]:
+                st.write(row['date'])
+            with cols[2]:
+                st.write(row['store_name'])
+            with cols[3]:
+                st.write(row['category'])
+            with cols[4]:
+                st.write(row['product_name'])
+            with cols[5]:
+                st.write(f"₹{row['sales_amount']:,.2f}")
+        
+        # Delete button
+        delete_submitted = st.form_submit_button("🗑️ Delete Selected Records")
+        
+        if delete_submitted and selected_ids:
+            # Confirmation prompt
+            st.warning(f"Are you sure you want to delete {len(selected_ids)} record(s)? This action cannot be undone.")
+            confirm_delete = st.checkbox("Confirm deletion", key="confirm_delete")
+            
+            if confirm_delete:
+                try:
+                    # Load current sales data
+                    daily_sales_df = load_data('daily_sales')
+                    
+                    # Remove selected IDs
+                    initial_len = len(daily_sales_df)
+                    daily_sales_df = daily_sales_df[~daily_sales_df['id'].isin(selected_ids)]
+                    
+                    if len(daily_sales_df) < initial_len:
+                        # Save updated data
+                        save_data(daily_sales_df, 'daily_sales')
+                        st.success(f"Successfully deleted {initial_len - len(daily_sales_df)} record(s)!")
+                        st.rerun()
+                    else:
+                        st.error("No records were deleted. Please check your selection.")
+                except Exception as e:
+                    st.error(f"Error deleting records: {str(e)}")
+        elif delete_submitted and not selected_ids:
+            st.error("Please select at least one record to delete.")
+    
+    # Display recent sales
     st.subheader("Recent Sales Data")
     try:
         recent_sales = get_sales_data()
@@ -1441,3 +1555,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+```
