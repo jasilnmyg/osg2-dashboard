@@ -36,7 +36,7 @@ def init_csv_files():
         'stores': ['store_id', 'store_name', 'created_date'],
         'daily_sales': ['id', 'date', 'store_id', 'category', 'product_name', 'sales_amount'],
         'campaigns': ['campaign_id', 'campaign_name', 'start_date', 'end_date', 'campaign_type', 
-                     'target_stores', 'offer_products', 'offer_description', 'discount_percent', 'created_date'],
+                     'target_stores', 'offer_products', 'offer_description', 'created_date'],
         'campaign_performance': ['id', 'campaign_id', 'store_id', 'product_name', 'category', 
                                 'sales_before', 'sales_during', 'sales_after', 'units_before', 
                                 'units_during', 'units_after', 'uplift_percent', 'units_uplift_percent']
@@ -154,7 +154,10 @@ PRODUCTS_BY_CATEGORY = {
     ]
 }
 
-CAMPAIGN_TYPES = ['Discount', 'BOGO', 'Bundle Offer', 'Loyalty Program']
+# All products for offer selection
+ALL_PRODUCTS = sorted(list(set().union(*PRODUCTS_BY_CATEGORY.values())) + ["Other (Custom)"])
+
+CAMPAIGN_TYPES = ['Bundle Offer', 'Loyalty Program']
 
 # -------------------------------
 # Helpers (Data access)
@@ -210,7 +213,7 @@ def import_stores_from_csv(csv_file):
     except Exception as e:
         return 0, [f"Error reading CSV: {e}"]
 
-def add_campaign(campaign_name, start_date, end_date, campaign_type, target_stores, offer_products, offer_description, discount_percent):
+def add_campaign(campaign_name, start_date, end_date, campaign_type, target_stores, offer_products, offer_description):
     try:
         campaigns_df = load_data('campaigns')
         campaign_id = generate_campaign_id(campaign_name)
@@ -223,7 +226,6 @@ def add_campaign(campaign_name, start_date, end_date, campaign_type, target_stor
             'target_stores': [','.join(target_stores) if isinstance(target_stores, list) else target_stores],
             'offer_products': [','.join(offer_products) if isinstance(offer_products, list) else offer_products],
             'offer_description': [offer_description],
-            'discount_percent': [discount_percent],
             'created_date': [datetime.now().date()]
         })
         campaigns_df = pd.concat([campaigns_df, new_campaign], ignore_index=True)
@@ -322,16 +324,13 @@ def create_prediction_model(data, campaigns_df):
     campaigns_df['start_date'] = pd.to_datetime(campaigns_df['start_date'], format='mixed', dayfirst=True)
     campaigns_df['end_date'] = pd.to_datetime(campaigns_df['end_date'], format='mixed', dayfirst=True)
     data['campaign_active'] = 0
-    data['discount_percent'] = 0
     for _, campaign in campaigns_df.iterrows():
         mask = (data['date'] >= campaign['start_date']) & (data['date'] <= campaign['end_date'])
         target_stores = campaign['target_stores'].split(',') if campaign['target_stores'] else []
         if 'All Stores' in target_stores or not target_stores:
             data.loc[mask, 'campaign_active'] = 1
-            data.loc[mask, 'discount_percent'] = campaign['discount_percent']
         else:
             data.loc[mask & data['store_id'].isin(target_stores), 'campaign_active'] = 1
-            data.loc[mask & data['store_id'].isin(target_stores), 'discount_percent'] = campaign['discount_percent']
     data['day_of_week'] = data['date'].dt.dayofweek
     data['month'] = data['date'].dt.month
     data['day_of_month'] = data['date'].dt.day
@@ -343,8 +342,7 @@ def create_prediction_model(data, campaigns_df):
     data_encoded = pd.get_dummies(data, columns=['store_id', 'category'], prefix=['store', 'cat'])
     feature_cols = [col for col in data_encoded.columns if col.startswith(('store_', 'cat_')) or 
                     col in ['day_of_week', 'month', 'day_of_month', 'is_weekend', 
-                            'sales_lag_1', 'sales_lag_7', 'sales_rolling_7', 
-                            'campaign_active', 'discount_percent']]
+                            'sales_lag_1', 'sales_lag_7', 'sales_rolling_7', 'campaign_active']]
     data_clean = data_encoded.dropna()
     if len(data_clean) < 20:
         return None, None, "Insufficient clean data for training"
@@ -602,15 +600,11 @@ def ai_predictions_page():
                 campaign_options = ['None'] + campaigns_df['campaign_name'].tolist()
                 selected_campaign = st.selectbox("Campaign (optional)", campaign_options)
                 campaign_active = selected_campaign != 'None'
-                discount_percent = 0
                 offer_products = []
                 if campaign_active:
                     campaign = campaigns_df[campaigns_df['campaign_name'] == selected_campaign]
                     if not campaign.empty:
-                        discount_percent = campaign['discount_percent'].iloc[0]
                         offer_products = campaign['offer_products'].iloc[0].split(',') if campaign['offer_products'].iloc[0] else []
-                    else:
-                        discount_percent = st.slider("Discount %", 0, 50, 20)
             if st.button("Generate Prediction") and selected_categories:
                 predictions = []
                 pred_date = pd.to_datetime(prediction_date)
@@ -622,8 +616,7 @@ def ai_predictions_page():
                             'month': pred_date.month,
                             'day_of_month': pred_date.day,
                             'is_weekend': int(pred_date.dayofweek >= 5),
-                            'campaign_active': int(campaign_active),
-                            'discount_percent': discount_percent
+                            'campaign_active': int(campaign_active)
                         }
                         recent_sales = get_sales_data(store_id, 
                                                       (pred_date - timedelta(days=30)).strftime('%Y-%m-%d'),
@@ -635,7 +628,7 @@ def ai_predictions_page():
                             features['sales_rolling_7'] = recent_sales['sales_amount'].tail(7).mean()
                         else:
                             features.update({'sales_lag_1': 0, 'sales_lag_7': 0, 'sales_rolling_7': 0})
-                        feature_cols = sorted(list(set(features.keys()) | {'day_of_week', 'month', 'day_of_month', 'is_weekend', 'campaign_active', 'discount_percent', 'sales_lag_1', 'sales_lag_7', 'sales_rolling_7'}))
+                        feature_cols = sorted(list(set(features.keys()) | {'day_of_week', 'month', 'day_of_month', 'is_weekend', 'campaign_active', 'sales_lag_1', 'sales_lag_7', 'sales_rolling_7'}))
                         vec = []
                         for col in feature_cols:
                             vec.append(features.get(col, 0))
@@ -653,7 +646,7 @@ def ai_predictions_page():
                             predicted = np.random.uniform(1000, 5000)
                         if campaign_active and offer_products:
                             if any(product in offer_products for product in PRODUCTS_BY_CATEGORY.get(category, [])):
-                                uplift_factor = 1 + (discount_percent / 100) * 1.5
+                                uplift_factor = 1.2  # Fixed uplift for Bundle Offer/Loyalty Program
                                 predicted *= uplift_factor
                         predictions.append({
                             'Store': store_id,
@@ -688,7 +681,7 @@ def campaign_analysis_page():
     
     st.subheader("Add New Campaign")
     with st.form("add_campaign_form"):
-        campaign_name = st.text_input("Campaign Name", placeholder="e.g., Summer Sale 2025")
+        campaign_name = st.text_input("Campaign Name", placeholder="e.g., Summer Bundle 2025")
         col1, col2 = st.columns(2)
         with col1:
             start_date = st.date_input("Start Date", value=datetime.now().date())
@@ -697,18 +690,16 @@ def campaign_analysis_page():
         campaign_type = st.selectbox("Campaign Type", CAMPAIGN_TYPES)
         store_options = ['All Stores'] + stores_df['store_id'].tolist()
         target_stores = st.multiselect("Target Stores", store_options, default=['All Stores'])
-        category = st.selectbox("Category for Offer Products", ITEM_CATEGORIES)
-        offer_products = st.multiselect("Offer Products", PRODUCTS_BY_CATEGORY.get(category, []) + ["Other (Custom)"])
+        offer_products = st.multiselect("Offer Products", ALL_PRODUCTS)
         if "Other (Custom)" in offer_products:
             custom_product = st.text_input("Enter Custom Product Name")
             if custom_product:
                 offer_products = [p if p != "Other (Custom)" else custom_product for p in offer_products]
-        discount_percent = st.slider("Discount %", 0, 50, 20)
-        offer_description = st.text_area("Offer Description", placeholder="e.g., 20% off on all electronics")
+        offer_description = st.text_area("Offer Description", placeholder="e.g., Buy one TV, get a FAN free")
         if st.form_submit_button("Add Campaign"):
             if campaign_name and start_date <= end_date and target_stores and offer_products:
                 if add_campaign(campaign_name, start_date, end_date, campaign_type, target_stores, 
-                                offer_products, offer_description, discount_percent):
+                                offer_products, offer_description):
                     st.success(f"Campaign {campaign_name} added successfully!")
                 else:
                     st.error("Error adding campaign")
