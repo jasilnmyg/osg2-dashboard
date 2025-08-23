@@ -10,51 +10,57 @@ from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 import warnings
+import sqlite3
 import os
 
 warnings.filterwarnings('ignore')
 
 # -------------------------------
-# CSV File Configuration
+# SQLite Configuration
 # -------------------------------
-DATA_DIR = './data'
-CSV_FILES = {
-    'stores': os.path.join(DATA_DIR, 'stores.csv'),
-    'daily_sales': os.path.join(DATA_DIR, 'daily_sales.csv'),
-    'campaigns': os.path.join(DATA_DIR, 'campaigns.csv'),
-    'campaign_performance': os.path.join(DATA_DIR, 'campaign_performance.csv')
-}
+DB_FILE = "sales_data.db"
 
-def init_csv_files():
-    if not os.path.exists(DATA_DIR):
-        os.makedirs(DATA_DIR)
-    
-    # Initialize empty CSV files if they don't exist
-    if not os.path.exists(CSV_FILES['stores']):
-        pd.DataFrame(columns=['store_id', 'store_name', 'created_date']).to_csv(CSV_FILES['stores'], index=False)
-    if not os.path.exists(CSV_FILES['daily_sales']):
-        pd.DataFrame(columns=['id', 'date', 'store_id', 'category', 'product_name', 'sales_amount', 'units_sold']).to_csv(CSV_FILES['daily_sales'], index=False)
-    if not os.path.exists(CSV_FILES['campaigns']):
-        pd.DataFrame(columns=['campaign_id', 'campaign_name', 'start_date', 'end_date', 'campaign_type', 'target_stores', 'offer_products', 'offer_description', 'created_date']).to_csv(CSV_FILES['campaigns'], index=False)
-    if not os.path.exists(CSV_FILES['campaign_performance']):
-        pd.DataFrame(columns=['id', 'campaign_id', 'store_id', 'product_name', 'category', 'sales_before', 'sales_during', 'sales_after', 'units_before', 'units_during', 'units_after', 'uplift_percent', 'units_uplift_percent']).to_csv(CSV_FILES['campaign_performance'], index=False)
-    
-    st.session_state['csv_initialized'] = True
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    # Create tables if they don't exist
+    cursor.execute('''CREATE TABLE IF NOT EXISTS stores
+                     (store_id TEXT PRIMARY KEY, store_name TEXT, created_date DATE)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS daily_sales
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, store_id TEXT, 
+                      category TEXT, product_name TEXT, sales_amount REAL,
+                      FOREIGN KEY (store_id) REFERENCES stores(store_id))''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS campaigns
+                     (campaign_id TEXT PRIMARY KEY, campaign_name TEXT, start_date DATE, end_date DATE, 
+                      campaign_type TEXT, target_stores TEXT, offer_products TEXT, 
+                      offer_description TEXT, created_date DATE)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS campaign_performance
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id TEXT, store_id TEXT, 
+                      product_name TEXT, category TEXT, sales_before REAL, sales_during REAL, 
+                      sales_after REAL, units_before INTEGER, units_during INTEGER, units_after INTEGER, 
+                      uplift_percent REAL, units_uplift_percent REAL,
+                      FOREIGN KEY (campaign_id) REFERENCES campaigns(campaign_id),
+                      FOREIGN KEY (store_id) REFERENCES stores(store_id))''')
+    conn.commit()
+    conn.close()
+    st.session_state['db_initialized'] = True
 
 def load_data(table_name):
     try:
-        df = pd.read_csv(CSV_FILES[table_name])
+        conn = sqlite3.connect(DB_FILE)
+        df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
+        conn.close()
         return df
-    except FileNotFoundError:
-        init_csv_files()
-        return pd.read_csv(CSV_FILES[table_name])
     except Exception as e:
         st.error(f"Error loading {table_name} data: {e}")
+        init_db()
         return pd.DataFrame()
 
 def save_data(df, table_name):
     try:
-        df.to_csv(CSV_FILES[table_name], index=False)
+        conn = sqlite3.connect(DB_FILE)
+        df.to_sql(table_name, conn, if_exists='replace', index=False)
+        conn.close()
     except Exception as e:
         st.error(f"Error saving {table_name} data: {e}")
 
@@ -194,7 +200,7 @@ def import_stores_from_csv(csv_file):
 # -------------------------------
 # Core: Sales & ML helpers
 # -------------------------------
-def add_daily_sales(date, store_id, category, product_name, sales_amount, units_sold):
+def add_daily_sales(date, store_id, category, product_name, sales_amount):
     if not category or category not in ITEM_CATEGORIES:
         st.error(f"Invalid category: {category}. Choose from {ITEM_CATEGORIES}")
         return False
@@ -205,18 +211,17 @@ def add_daily_sales(date, store_id, category, product_name, sales_amount, units_
         st.warning(f"Product {product_name} not in predefined list for {category}. Adding as custom.")
     try:
         daily_sales_df = load_data('daily_sales')
-        new_id = daily_sales_df['id'].max() + 1 if not daily_sales_df.empty else 1
         new_sale = pd.DataFrame({
-            'id': [new_id],
             'date': [date],
             'store_id': [store_id],
             'category': [category],
             'product_name': [product_name],
-            'sales_amount': [sales_amount],
-            'units_sold': [units_sold]
+            'sales_amount': [sales_amount]
         })
-        daily_sales_df = pd.concat([daily_sales_df, new_sale], ignore_index=True)
-        save_data(daily_sales_df, 'daily_sales')
+        # Append to SQLite (ID is auto-incremented by SQLite)
+        conn = sqlite3.connect(DB_FILE)
+        new_sale.to_sql('daily_sales', conn, if_exists='append', index=False)
+        conn.close()
         st.success(f"Successfully added sales data for {product_name} in {category}")
         return True
     except Exception as e:
@@ -471,7 +476,7 @@ def sales_analysis_page():
         category_filter = None if selected_category == "All" else selected_category
         sales_data = get_sales_data(store_filter, start_date, end_date, category_filter)
         if not sales_data.empty:
-            colA, colB, colC, colD = st.columns(4)
+            colA, colB, colC = st.columns(3)
             with colA:
                 total_sales = sales_data['sales_amount'].sum()
                 st.metric("Total Sales", f"₹{total_sales:,.2f}")
@@ -480,9 +485,6 @@ def sales_analysis_page():
                 avg_daily_sales = daily_totals['daily'].mean()
                 st.metric("Avg Daily Sales", f"₹{avg_daily_sales:,.2f}")
             with colC:
-                total_units = sales_data['units_sold'].sum()
-                st.metric("Total Units Sold", f"{total_units:,}")
-            with colD:
                 unique_categories = sales_data['category'].nunique()
                 st.metric("Categories Sold", unique_categories)
             c1, c2 = st.columns(2)
@@ -521,9 +523,10 @@ def sales_analysis_page():
             fig.update_xaxis(tickangle=45)
             st.plotly_chart(fig, use_container_width=True)
             st.subheader("Detailed Sales Data")
-            st.dataframe(sales_data, use_container_width=True)
+            display_cols = ['date', 'store_name', 'category', 'product_name', 'sales_amount']
+            st.dataframe(sales_data[display_cols], use_container_width=True)
             # Add download button for detailed sales data as CSV
-            csv = sales_data.to_csv(index=False)
+            csv = sales_data[display_cols].to_csv(index=False)
             st.download_button(
                 label="Download Sales Data as CSV",
                 data=csv,
@@ -730,10 +733,9 @@ def daily_sales_page():
             else:
                 product_name = st.text_input("Product Name")
             sales_amount = st.number_input("Sales Amount (₹)", min_value=0.0, format="%.2f")
-            units_sold = st.number_input("Units Sold", min_value=0, value=1)
             if st.form_submit_button("Add Sales Data"):
                 if product_name and sales_amount >= 0 and category and store_id:
-                    if add_daily_sales(date, store_id, category, product_name, sales_amount, units_sold):
+                    if add_daily_sales(date, store_id, category, product_name, sales_amount):
                         st.success(f"Sales data for {product_name} added successfully!")
                     else:
                         st.error(f"Failed to add sales data for {product_name}")
@@ -741,7 +743,7 @@ def daily_sales_page():
                     st.error("Please fill all required fields (Date, Store, Category, Product Name, Sales Amount)")
     with col2:
         st.subheader("Bulk Upload")
-        st.info("CSV format: date,store_id,category,product_name,sales_amount,units_sold")
+        st.info("CSV format: date,store_id,category,product_name,sales_amount")
         uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
         if uploaded_file is not None:
             try:
@@ -750,9 +752,7 @@ def daily_sales_page():
                 if all(col in df.columns for col in required_cols):
                     df['category'] = df['category'].apply(lambda x: x if x in ITEM_CATEGORIES else 'OTHERS')
                     df['sales_amount'] = pd.to_numeric(df['sales_amount'], errors='coerce').fillna(0)
-                    df['units_sold'] = pd.to_numeric(df['units_sold'], errors='coerce').fillna(0).astype(int)
                     df = df[df['sales_amount'] >= 0]
-                    df = df[df['units_sold'] >= 0]
                     non_standard_products = df[~df.apply(
                         lambda row: row['product_name'] in PRODUCTS_BY_CATEGORY.get(row['category'], []), axis=1
                     )][['product_name', 'category']]
@@ -769,8 +769,7 @@ def daily_sales_page():
                                 row['store_id'], 
                                 row['category'], 
                                 row['product_name'], 
-                                row['sales_amount'], 
-                                row['units_sold']
+                                row['sales_amount']
                             ):
                                 success_count += 1
                             else:
@@ -790,7 +789,7 @@ def daily_sales_page():
     st.subheader("Recent Sales Data")
     recent_sales = get_sales_data()
     if not recent_sales.empty:
-        display_cols = ['date', 'store_name', 'category', 'product_name', 'sales_amount', 'units_sold']
+        display_cols = ['date', 'store_name', 'category', 'product_name', 'sales_amount']
         st.dataframe(recent_sales[display_cols].head(20), use_container_width=True)
         # Add download button for recent sales data as CSV
         csv = recent_sales[display_cols].to_csv(index=False)
@@ -804,8 +803,8 @@ def daily_sales_page():
         st.info("No sales data available")
 
 def main():
-    if 'csv_initialized' not in st.session_state:
-        init_csv_files()
+    if 'db_initialized' not in st.session_state:
+        init_db()
     st.title("📈 Sales Prediction & Campaign Analysis System")
     st.markdown("AI-powered sales forecasting, campaign planning, and performance analysis")
     st.sidebar.title("Navigation")
