@@ -54,26 +54,43 @@ def load_data(table_name):
         local_path = CSV_FILES[table_name]
         df = pd.read_csv(local_path)
         
+        # Handle empty dataframes
+        if df.empty:
+            return df
+            
         # Handle date columns with better error handling
         if table_name in ['daily_sales', 'campaigns']:
             date_cols = ['date'] if table_name == 'daily_sales' else ['start_date', 'end_date']
             for col in date_cols:
                 if col in df.columns and not df.empty:
-                    # Convert dates with error handling
-                    df[col] = pd.to_datetime(df[col], errors='coerce', format='mixed')
-                    # Remove rows with invalid dates
-                    invalid_mask = df[col].isna()
-                    if invalid_mask.any():
-                        st.warning(f"Removed {invalid_mask.sum()} invalid date entries from {table_name}.csv")
-                        df = df[~invalid_mask]
+                    # Only process if column has data
+                    if not df[col].isna().all():
+                        # Convert dates with error handling
+                        original_count = len(df)
+                        df[col] = pd.to_datetime(df[col], errors='coerce', format='mixed')
+                        # Remove rows with invalid dates only if there are valid dates
+                        invalid_mask = df[col].isna()
+                        if invalid_mask.any() and not invalid_mask.all():
+                            invalid_count = invalid_mask.sum()
+                            if invalid_count < original_count:  # Don't remove all rows
+                                df = df[~invalid_mask]
+                                if invalid_count > 0:
+                                    st.warning(f"Removed {invalid_count} invalid date entries from {table_name}.csv column '{col}'")
         
         return df
     except FileNotFoundError:
         init_csv_files()
         return pd.read_csv(CSV_FILES[table_name])
     except Exception as e:
-        st.error(f"Error loading {table_name} data: {e}")
-        return pd.DataFrame()
+        # Show error but don't break the app
+        if 'end_date' in str(e) and table_name == 'campaigns':
+            # Handle missing end_date column in campaigns
+            st.error(f"Error loading campaigns data: Missing 'end_date' column. Reinitializing campaigns file...")
+            init_csv_files()
+            return pd.read_csv(CSV_FILES[table_name])
+        else:
+            st.error(f"Error loading {table_name} data: {e}")
+            return pd.DataFrame()
 
 def save_data(df, table_name):
     try:
@@ -310,30 +327,44 @@ def get_sales_data(store_name=None, start_date=None, end_date=None, category=Non
         
         df = daily_sales_df.copy()
         
-        # Convert date column
-        df['date'] = pd.to_datetime(df['date'], errors='coerce')
-        df = df.dropna(subset=['date'])  # Remove invalid dates
+        # Fix None values in store_name column
+        if 'store_name' in df.columns:
+            df['store_name'] = df['store_name'].fillna('Unknown Store').astype(str)
+            # Remove rows where store_name is actually 'None' string
+            df = df[df['store_name'] != 'None']
+        
+        # Convert date column safely
+        if 'date' in df.columns and not df.empty:
+            df['date'] = pd.to_datetime(df['date'], errors='coerce')
+            df = df.dropna(subset=['date'])  # Remove invalid dates
+        
+        if df.empty:
+            return pd.DataFrame()
         
         # Handle campaign filtering
         if campaign_id:
-            campaigns_df = load_data('campaigns')
-            campaign = campaigns_df[campaigns_df['campaign_id'] == campaign_id]
-            if not campaign.empty:
-                campaign_start = pd.to_datetime(campaign['start_date'].iloc[0])
-                campaign_end = pd.to_datetime(campaign['end_date'].iloc[0])
-                target_stores = campaign['target_stores'].iloc[0].split(',') if campaign['target_stores'].iloc[0] else []
-                offer_products = campaign['offer_products'].iloc[0].split(',') if campaign['offer_products'].iloc[0] else []
-                
-                # Filter by campaign dates
-                df = df[(df['date'] >= campaign_start) & (df['date'] <= campaign_end)]
-                
-                # Filter by target stores
-                if target_stores and 'All Stores' not in target_stores:
-                    df = df[df['store_name'].isin([s.strip() for s in target_stores])]
-                
-                # Filter by offer products
-                if offer_products:
-                    df = df[df['product_name'].isin([p.strip() for p in offer_products])]
+            try:
+                campaigns_df = load_data('campaigns')
+                if not campaigns_df.empty and campaign_id in campaigns_df['campaign_id'].values:
+                    campaign = campaigns_df[campaigns_df['campaign_id'] == campaign_id].iloc[0]
+                    
+                    campaign_start = pd.to_datetime(campaign['start_date'])
+                    campaign_end = pd.to_datetime(campaign['end_date'])
+                    target_stores = campaign['target_stores'].split(',') if pd.notna(campaign['target_stores']) and campaign['target_stores'] else []
+                    offer_products = campaign['offer_products'].split(',') if pd.notna(campaign['offer_products']) and campaign['offer_products'] else []
+                    
+                    # Filter by campaign dates
+                    df = df[(df['date'] >= campaign_start) & (df['date'] <= campaign_end)]
+                    
+                    # Filter by target stores
+                    if target_stores and 'All Stores' not in target_stores:
+                        df = df[df['store_name'].isin([s.strip() for s in target_stores])]
+                    
+                    # Filter by offer products
+                    if offer_products:
+                        df = df[df['product_name'].isin([p.strip() for p in offer_products])]
+            except Exception as e:
+                st.warning(f"Error filtering by campaign: {e}")
         
         # Apply other filters
         if store_name:
@@ -358,7 +389,7 @@ def get_sales_data(store_name=None, start_date=None, end_date=None, category=Non
                 df = df[df['product_name'] == product_name]
         
         # Sort by date descending
-        if not df.empty:
+        if not df.empty and 'date' in df.columns:
             df = df.sort_values('date', ascending=False)
             # Convert date back to string for display
             df['date'] = df['date'].dt.strftime('%Y-%m-%d')
@@ -518,7 +549,14 @@ def daily_sales_page():
         st.subheader("Add Sales Data")
         with st.form("sales_entry_form"):
             date = st.date_input("Date", value=datetime.now().date())
-            store_name = st.selectbox("Store Name", stores_df['store_name'].tolist())
+            
+            # Ensure we have valid store options
+            store_options = stores_df['store_name'].dropna().tolist()
+            if not store_options:
+                st.error("No valid stores found. Please add stores first.")
+                return
+                
+            store_name = st.selectbox("Store Name", store_options)
             category = st.selectbox("Category", ITEM_CATEGORIES)
             
             # Dynamic product selection based on category
@@ -563,8 +601,17 @@ def daily_sales_page():
                 if all(col in df.columns for col in required_cols):
                     # Data validation and cleaning
                     df = df.dropna(subset=required_cols)
+                    
+                    # Clean store names - remove None values
+                    df['store_name'] = df['store_name'].fillna('Unknown Store').astype(str)
+                    df = df[df['store_name'].str.strip() != '']
+                    df = df[df['store_name'] != 'None']
+                    
+                    # Validate dates
                     df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.strftime('%Y-%m-%d')
                     df = df.dropna(subset=['date'])
+                    
+                    # Validate sales amounts
                     df['sales_amount'] = pd.to_numeric(df['sales_amount'], errors='coerce')
                     df = df.dropna(subset=['sales_amount'])
                     df = df[df['sales_amount'] >= 0]
@@ -575,7 +622,7 @@ def daily_sales_page():
                     
                     # Add missing stores
                     for store in df['store_name'].unique():
-                        if not store_name_exists(store):
+                        if store and not store_name_exists(store):
                             add_store(store)
                     
                     # Validate categories
@@ -610,6 +657,9 @@ def daily_sales_page():
                             progress_bar.progress(progress)
                             status_text.text(f"Processing: {idx + 1}/{len(df)}")
                         
+                        progress_bar.empty()
+                        status_text.empty()
+                        
                         st.success(f"Import completed! Success: {success_count}, Errors: {error_count}")
                         if success_count > 0:
                             st.rerun()
@@ -618,23 +668,34 @@ def daily_sales_page():
             except Exception as e:
                 st.error(f"Error processing file: {e}")
     
-    # Display recent sales
+    # Display recent sales with error handling
     st.subheader("Recent Sales Data")
-    recent_sales = get_sales_data()
-    if not recent_sales.empty:
-        display_cols = ['date', 'store_name', 'category', 'product_name', 'sales_amount']
-        st.dataframe(recent_sales[display_cols].head(20), use_container_width=True)
-        
-        # Download button
-        csv = recent_sales[display_cols].to_csv(index=False)
-        st.download_button(
-            label="📥 Download Recent Sales Data",
-            data=csv,
-            file_name=f"sales_data_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv"
-        )
-    else:
-        st.info("No sales data available")
+    try:
+        recent_sales = get_sales_data()
+        if not recent_sales.empty:
+            # Filter out any remaining None values
+            recent_sales = recent_sales[recent_sales['store_name'] != 'None']
+            recent_sales = recent_sales.dropna(subset=['store_name'])
+            
+            if not recent_sales.empty:
+                display_cols = ['date', 'store_name', 'category', 'product_name', 'sales_amount']
+                st.dataframe(recent_sales[display_cols].head(20), use_container_width=True)
+                
+                # Download button
+                csv = recent_sales[display_cols].to_csv(index=False)
+                st.download_button(
+                    label="📥 Download Recent Sales Data",
+                    data=csv,
+                    file_name=f"sales_data_{datetime.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.info("No valid sales data to display")
+        else:
+            st.info("No sales data available")
+    except Exception as e:
+        st.warning(f"Error displaying recent sales: {e}")
+        st.info("There might be data format issues. Please check your CSV files or reinitialize the data.")
 
 def sales_analysis_page():
     st.header("📈 Sales Analysis")
@@ -1315,7 +1376,7 @@ def main():
     
     selected_page = st.sidebar.selectbox("Choose a page", list(pages.keys()))
     
-    # Quick stats in sidebar
+    # Quick stats in sidebar with error handling
     st.sidebar.markdown("---")
     st.sidebar.subheader("📊 Quick Stats")
     
@@ -1325,17 +1386,51 @@ def main():
         campaigns_df = load_data('campaigns')
         
         st.sidebar.metric("Total Stores", len(stores_df))
-        st.sidebar.metric("Sales Records", len(sales_df))
-        st.sidebar.metric("Active Campaigns", len(campaigns_df))
         
+        # Filter out None store names for accurate count
         if not sales_df.empty:
-            total_sales = sales_df['sales_amount'].sum()
-            st.sidebar.metric("Total Sales", f"₹{total_sales:,.0f}")
+            valid_sales = sales_df[sales_df['store_name'] != 'None'].dropna(subset=['store_name'])
+            st.sidebar.metric("Sales Records", len(valid_sales))
+            
+            if len(valid_sales) > 0:
+                try:
+                    total_sales = pd.to_numeric(valid_sales['sales_amount'], errors='coerce').sum()
+                    st.sidebar.metric("Total Sales", f"₹{total_sales:,.0f}")
+                except:
+                    st.sidebar.metric("Total Sales", "N/A")
+            else:
+                st.sidebar.metric("Total Sales", "₹0")
+        else:
+            st.sidebar.metric("Sales Records", 0)
+            st.sidebar.metric("Total Sales", "₹0")
+        
+        st.sidebar.metric("Campaigns", len(campaigns_df))
+        
+        # Add a data health indicator
+        if not sales_df.empty:
+            none_count = len(sales_df[sales_df['store_name'] == 'None'])
+            if none_count > 0:
+                st.sidebar.warning(f"⚠️ {none_count} sales records have missing store names")
+                if st.sidebar.button("🔧 Clean Data"):
+                    # Offer to clean data
+                    st.sidebar.info("Data cleaning feature coming soon!")
+        
     except Exception as e:
         st.sidebar.error("Error loading stats")
+        st.sidebar.caption(f"Error: {str(e)}")
     
     st.sidebar.markdown("---")
     st.sidebar.info("💡 **Tip:** Start by adding stores, then input daily sales data, and create campaigns for better predictions!")
+    
+    # Add data management options
+    with st.sidebar.expander("🛠️ Data Management"):
+        if st.button("🔄 Reinitialize CSV Files"):
+            try:
+                init_csv_files()
+                st.success("CSV files reinitialized!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error reinitializing: {e}")
     
     # Display selected page
     try:
