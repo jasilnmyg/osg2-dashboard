@@ -56,10 +56,16 @@ def load_data(table_name):
         if table_name == 'daily_sales' or table_name == 'campaigns':
             # Validate date columns
             date_cols = ['date'] if table_name == 'daily_sales' else ['start_date', 'end_date']
+            invalid_rows = []
             for col in date_cols:
-                df = df[df[col].apply(lambda x: is_valid_date(str(x)))]
-            if df.empty and not pd.read_csv(local_path).empty:
-                st.warning(f"Removed invalid date entries from {table_name}.csv. Please ensure '{col}' contains valid dates (e.g., YYYY-MM-DD).")
+                mask = df[col].apply(lambda x: not is_valid_date(str(x)) if pd.notna(x) else False)
+                invalid_rows.extend(df[mask].index.tolist())
+                df = df[~mask]
+            if invalid_rows and not df.empty:
+                st.warning(f"Removed {len(invalid_rows)} invalid date entries from {table_name}.csv for column '{col}'. Check your data.")
+            elif invalid_rows and df.empty:
+                st.warning(f"All rows in {table_name}.csv had invalid dates for '{col}'. Returning original data with warnings.")
+                df = pd.read_csv(local_path)  # Return original data with invalid dates
         return df
     except FileNotFoundError:
         init_csv_files()
@@ -248,6 +254,9 @@ def add_daily_sales(date, store_id, category, product_name, sales_amount):
     if not product_name:
         st.error("Product name cannot be empty")
         return False
+    if not store_id_exists(store_id):
+        st.error(f"Store ID {store_id} does not exist. Please add the store first.")
+        return False
     if product_name not in PRODUCTS_BY_CATEGORY.get(category, []) and product_name != "Other (Custom)":
         st.warning(f"Product {product_name} not in predefined list for {category}. Adding as custom.")
     try:
@@ -277,6 +286,7 @@ def get_sales_data(store_id=None, start_date=None, end_date=None, category=None,
         if daily_sales_df.empty or stores_df.empty:
             return pd.DataFrame()
         df = daily_sales_df.merge(stores_df[['store_id', 'store_name']], on='store_id', how='left')
+        df['store_name'] = df['store_name'].fillna('Unknown Store')
         if campaign_id:
             campaign = campaigns_df[campaigns_df['campaign_id'] == campaign_id]
             if not campaign.empty:
@@ -455,7 +465,10 @@ def daily_sales_page():
                     if not non_standard_products.empty:
                         st.warning(f"Non-standard products detected (will be added as custom):\n{non_standard_products.drop_duplicates().to_string(index=False)}")
                     st.write("Preview of data to be imported:")
-                    st.dataframe(df.head())
+                    # Merge with stores to show store_name
+                    preview_df = df.merge(stores_df[['store_id', 'store_name']], on='store_id', how='left')
+                    preview_df['store_name'] = preview_df['store_name'].fillna('Unknown Store')
+                    st.dataframe(preview_df[['date', 'store_name', 'category', 'product_name', 'sales_amount']].head())
                     if st.button("Import Data"):
                         errors = []
                         success_count = 0
@@ -648,8 +661,9 @@ def ai_predictions_page():
                             if any(product in offer_products for product in PRODUCTS_BY_CATEGORY.get(category, [])):
                                 uplift_factor = 1.2  # Fixed uplift for Bundle Offer/Loyalty Program
                                 predicted *= uplift_factor
+                        store_name = stores_df[stores_df['store_id'] == store_id]['store_name'].iloc[0] if store_id_exists(store_id) else 'Unknown Store'
                         predictions.append({
-                            'Store': store_id,
+                            'Store': store_name,
                             'Category': category,
                             'Predicted Sales': f"₹{predicted:,.2f}",
                             'Confidence': f"{np.random.uniform(70, 95):.1f}%"
@@ -658,7 +672,7 @@ def ai_predictions_page():
                 pred_df = pd.DataFrame(predictions)
                 st.dataframe(pred_df, use_container_width=True)
                 fig = px.bar(pred_df, x='Category', y='Predicted Sales', color='Store',
-                             title=f'Sales Prediction for {", ".join(target_stores)} on {prediction_date}')
+                             title=f'Sales Prediction for {", ".join([stores_df[stores_df["store_id"] == sid]["store_name"].iloc[0] if store_id_exists(sid) else "Unknown Store" for sid in target_stores])} on {prediction_date}')
                 st.plotly_chart(fig, use_container_width=True)
                 csv = pred_df.to_csv(index=False)
                 st.download_button(
