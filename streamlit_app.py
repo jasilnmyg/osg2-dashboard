@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import sqlite3
 import pickle
 from datetime import datetime, timedelta
 import re
@@ -11,71 +10,69 @@ from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 import warnings
+import os
+from io import BytesIO
 
 warnings.filterwarnings('ignore')
 
 # -------------------------------
-# Database & Schema
+# CSV File Configuration
 # -------------------------------
-DB_PATH = 'sales_campaign_data.db'
+DATA_DIR = './data'
+CSV_FILES = {
+    'stores': os.path.join(DATA_DIR, 'stores.csv'),
+    'daily_sales': os.path.join(DATA_DIR, 'daily_sales.csv'),
+    'campaigns': os.path.join(DATA_DIR, 'campaigns.csv'),
+    'campaign_performance': os.path.join(DATA_DIR, 'campaign_performance.csv')
+}
 
-def init_database():
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS stores (
-                store_id TEXT PRIMARY KEY,
-                store_name TEXT NOT NULL,
-                created_date DATE DEFAULT CURRENT_DATE
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS daily_sales (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date DATE NOT NULL,
-                store_id TEXT NOT NULL,
-                category TEXT NOT NULL,
-                product_name TEXT NOT NULL,
-                sales_amount REAL NOT NULL,
-                units_sold INTEGER DEFAULT 0,
-                FOREIGN KEY (store_id) REFERENCES stores (store_id)
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS campaigns (
-                campaign_id TEXT PRIMARY KEY,
-                campaign_name TEXT NOT NULL,
-                start_date DATE NOT NULL,
-                end_date DATE NOT NULL,
-                campaign_type TEXT NOT NULL,
-                target_stores TEXT,
-                offer_products TEXT NOT NULL,
-                offer_description TEXT,
-                created_date DATE DEFAULT CURRENT_DATE
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS campaign_performance (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                campaign_id TEXT NOT NULL,
-                store_id TEXT NOT NULL,
-                product_name TEXT NOT NULL,
-                category TEXT NOT NULL,
-                sales_before REAL,
-                sales_during REAL,
-                sales_after REAL,
-                units_before INTEGER,
-                units_during INTEGER,
-                units_after INTEGER,
-                uplift_percent REAL,
-                units_uplift_percent REAL,
-                FOREIGN KEY (campaign_id) REFERENCES campaigns (campaign_id),
-                FOREIGN KEY (store_id) REFERENCES stores (store_id)
-            )
-        ''')
-    # end with
+def init_csv_files():
+    if not os.path.exists(DATA_DIR):
+        os.makedirs(DATA_DIR)
+    
+    # Initialize empty CSV files if they don't exist
+    if not os.path.exists(CSV_FILES['stores']):
+        pd.DataFrame(columns=['store_id', 'store_name', 'created_date']).to_csv(CSV_FILES['stores'], index=False)
+    if not os.path.exists(CSV_FILES['daily_sales']):
+        pd.DataFrame(columns=['id', 'date', 'store_id', 'category', 'product_name', 'sales_amount', 'units_sold']).to_csv(CSV_FILES['daily_sales'], index=False)
+    if not os.path.exists(CSV_FILES['campaigns']):
+        pd.DataFrame(columns=['campaign_id', 'campaign_name', 'start_date', 'end_date', 'campaign_type', 'target_stores', 'offer_products', 'offer_description', 'created_date']).to_csv(CSV_FILES['campaigns'], index=False)
+    if not os.path.exists(CSV_FILES['campaign_performance']):
+        pd.DataFrame(columns=['id', 'campaign_id', 'store_id', 'product_name', 'category', 'sales_before', 'sales_during', 'sales_after', 'units_before', 'units_during', 'units_after', 'uplift_percent', 'units_uplift_percent']).to_csv(CSV_FILES['campaign_performance'], index=False)
+    
+    st.session_state['csv_initialized'] = True
 
-init_database()
+def load_data(table_name):
+    try:
+        df = pd.read_csv(CSV_FILES[table_name])
+        return df
+    except FileNotFoundError:
+        init_csv_files()
+        return pd.read_csv(CSV_FILES[table_name])
+    except Exception as e:
+        st.error(f"Error loading {table_name} data: {e}")
+        return pd.DataFrame()
+
+def save_data(df, table_name):
+    try:
+        df.to_csv(CSV_FILES[table_name], index=False)
+    except Exception as e:
+        st.error(f"Error saving {table_name} data: {e}")
+
+def export_to_excel():
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        for table_name in CSV_FILES:
+            df = load_data(table_name)
+            # Split large datasets into multiple sheets if exceeding 1 million rows
+            if len(df) > 1000000:
+                for i in range(0, len(df), 1000000):
+                    sheet_name = f"{table_name}_{i//1000000 + 1}"
+                    df[i:i+1000000].to_excel(writer, sheet_name=sheet_name, index=False)
+            else:
+                df.to_excel(writer, sheet_name=table_name, index=False)
+    output.seek(0)
+    return output
 
 # -------------------------------
 # Helpers: ID generation
@@ -87,10 +84,8 @@ def slugify(text: str) -> str:
     return s
 
 def store_id_exists(store_id: str) -> bool:
-    with sqlite3.connect(DB_PATH) as conn:
-        cur = conn.cursor()
-        cur.execute('SELECT 1 FROM stores WHERE store_id = ?', (store_id,))
-        return cur.fetchone() is not None
+    stores_df = load_data('stores')
+    return store_id in stores_df['store_id'].values
 
 def generate_store_id_from_name(name: str) -> str:
     base = slugify(name)
@@ -141,41 +136,46 @@ PRODUCTS_BY_CATEGORY = {
 }
 
 # -------------------------------
-# Helpers (DB access)
+# Helpers (Data access)
 # -------------------------------
-def get_db_connection():
-    return sqlite3.connect(DB_PATH)
-
 def add_store(store_id, store_name):
-    with get_db_connection() as conn:
-        try:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT OR REPLACE INTO stores (store_id, store_name)
-                VALUES (?, ?)
-            ''', (store_id, store_name))
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Error adding store: {e}")
-            return False
+    try:
+        stores_df = load_data('stores')
+        new_store = pd.DataFrame({
+            'store_id': [store_id],
+            'store_name': [store_name],
+            'created_date': [datetime.now().date()]
+        })
+        stores_df = pd.concat([stores_df, new_store], ignore_index=True)
+        save_data(stores_df, 'stores')
+        return True
+    except Exception as e:
+        st.error(f"Error adding store: {e}")
+        return False
 
 def delete_store(store_id):
-    with get_db_connection() as conn:
-        try:
-            cursor = conn.cursor()
-            cursor.execute('DELETE FROM daily_sales WHERE store_id = ?', (store_id,))
-            cursor.execute('DELETE FROM stores WHERE store_id = ?', (store_id,))
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Error deleting store: {e}")
-            return False
+    try:
+        stores_df = load_data('stores')
+        daily_sales_df = load_data('daily_sales')
+        campaign_performance_df = load_data('campaign_performance')
+        # Remove store-related data
+        stores_df = stores_df[stores_df['store_id'] != store_id]
+        daily_sales_df = daily_sales_df[daily_sales_df['store_id'] != store_id]
+        campaign_performance_df = campaign_performance_df[campaign_performance_df['store_id'] != store_id]
+        # Save updated data
+        save_data(stores_df, 'stores')
+        save_data(daily_sales_df, 'daily_sales')
+        save_data(campaign_performance_df, 'campaign_performance')
+        return True
+    except Exception as e:
+        st.error(f"Error deleting store: {e}")
+        return False
 
 def get_all_stores():
-    with get_db_connection() as conn:
-        df = pd.read_sql_query('SELECT * FROM stores ORDER BY store_name', conn)
-    return df
+    stores_df = load_data('stores')
+    if not stores_df.empty:
+        stores_df = stores_df.sort_values('store_name')
+    return stores_df
 
 def import_stores_from_excel(excel_file):
     try:
@@ -192,6 +192,7 @@ def import_stores_from_excel(excel_file):
             return 0, ["Excel must contain a column named 'Store' (case-insensitive)."]
         imported = 0
         errors = []
+        stores_df = load_data('stores')
         for _, row in df.iterrows():
             store_name = "" if pd.isna(row.iloc[store_name_idx]) else str(row.iloc[store_name_idx]).strip()
             if not store_name:
@@ -218,61 +219,55 @@ def add_daily_sales(date, store_id, category, product_name, sales_amount, units_
         return False
     if product_name not in PRODUCTS_BY_CATEGORY.get(category, []) and product_name != "Other (Custom)":
         st.warning(f"Product {product_name} not in predefined list for {category}. Adding as custom.")
-    with get_db_connection() as conn:
-        try:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO daily_sales (date, store_id, category, product_name, sales_amount, units_sold)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (date, store_id, category, product_name, sales_amount, units_sold))
-            conn.commit()
-            st.success(f"Successfully added sales data for {product_name} in {category}")
-            return True
-        except Exception as e:
-            st.error(f"Error adding sales data for {product_name}: {str(e)}")
-            return False
+    try:
+        daily_sales_df = load_data('daily_sales')
+        new_id = daily_sales_df['id'].max() + 1 if not daily_sales_df.empty else 1
+        new_sale = pd.DataFrame({
+            'id': [new_id],
+            'date': [date],
+            'store_id': [store_id],
+            'category': [category],
+            'product_name': [product_name],
+            'sales_amount': [sales_amount],
+            'units_sold': [units_sold]
+        })
+        daily_sales_df = pd.concat([daily_sales_df, new_sale], ignore_index=True)
+        save_data(daily_sales_df, 'daily_sales')
+        st.success(f"Successfully added sales data for {product_name} in {category}")
+        return True
+    except Exception as e:
+        st.error(f"Error adding sales data for {product_name}: {str(e)}")
+        return False
 
 def get_sales_data(store_id=None, start_date=None, end_date=None, category=None, product_name=None):
-    with get_db_connection() as conn:
-        query = '''
-            SELECT ds.*, s.store_name
-            FROM daily_sales ds
-            JOIN stores s ON ds.store_id = s.store_id
-            WHERE 1=1
-        '''
-        params = []
+    try:
+        daily_sales_df = load_data('daily_sales')
+        stores_df = load_data('stores')
+        if daily_sales_df.empty or stores_df.empty:
+            return pd.DataFrame()
+        df = daily_sales_df.merge(stores_df[['store_id', 'store_name']], on='store_id', how='left')
         if store_id:
             if isinstance(store_id, list):
-                placeholders = ','.join(['?' for _ in store_id])
-                query += f' AND ds.store_id IN ({placeholders})'
-                params.extend(store_id)
+                df = df[df['store_id'].isin(store_id)]
             else:
-                query += ' AND ds.store_id = ?'
-                params.append(store_id)
+                df = df[df['store_id'] == store_id]
         if start_date:
-            query += ' AND ds.date >= ?'
-            params.append(start_date)
+            df = df[pd.to_datetime(df['date']) >= pd.to_datetime(start_date)]
         if end_date:
-            query += ' AND ds.date <= ?'
-            params.append(end_date)
+            df = df[pd.to_datetime(df['date']) <= pd.to_datetime(end_date)]
         if category:
-            query += ' AND ds.category = ?'
-            params.append(category)
+            df = df[df['category'] == category]
         if product_name:
             if isinstance(product_name, list):
-                placeholders = ','.join(['?' for _ in product_name])
-                query += f' AND ds.product_name IN ({placeholders})'
-                params.extend(product_name)
+                df = df[df['product_name'].isin(product_name)]
             else:
-                query += ' AND ds.product_name = ?'
-                params.append(product_name)
-        query += ' ORDER BY ds.date DESC'
-        try:
-            df = pd.read_sql_query(query, conn, params=params)
-            return df
-        except Exception as e:
-            st.error(f"Error retrieving sales data: {e}")
-            return pd.DataFrame()
+                df = df[df['product_name'] == product_name]
+        if not df.empty:
+            df = df.sort_values('date', ascending=False)
+        return df
+    except Exception as e:
+        st.error(f"Error retrieving sales data: {e}")
+        return pd.DataFrame()
 
 def create_prediction_model(data):
     if len(data) < 30:
@@ -433,26 +428,29 @@ def campaign_management_page():
             if st.form_submit_button("Create Campaign"):
                 if campaign_id and campaign_name and target_stores and selected_products:
                     product_names = [prod[0] for prod in selected_products]
-                    with get_db_connection() as conn:
-                        try:
-                            cursor = conn.cursor()
-                            cursor.execute('''
-                                INSERT INTO campaigns
-                                (campaign_id, campaign_name, start_date, end_date, campaign_type,
-                                 target_stores, offer_products, offer_description)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                            ''', (campaign_id, campaign_name, start_date, end_date, campaign_type,
-                                  str(target_stores), str(product_names), offer_description))
-                            conn.commit()
-                            st.success("Campaign created successfully!")
-                        except Exception as e:
-                            st.error(f"Error creating campaign: {e}")
+                    try:
+                        campaigns_df = load_data('campaigns')
+                        new_campaign = pd.DataFrame({
+                            'campaign_id': [campaign_id],
+                            'campaign_name': [campaign_name],
+                            'start_date': [start_date],
+                            'end_date': [end_date],
+                            'campaign_type': [campaign_type],
+                            'target_stores': [str(target_stores)],
+                            'offer_products': [str(product_names)],
+                            'offer_description': [offer_description],
+                            'created_date': [datetime.now().date()]
+                        })
+                        campaigns_df = pd.concat([campaigns_df, new_campaign], ignore_index=True)
+                        save_data(campaigns_df, 'campaigns')
+                        st.success("Campaign created successfully!")
+                    except Exception as e:
+                        st.error(f"Error creating campaign: {e}")
                 else:
                     st.error("Please fill all required fields and select at least one product")
     with col2:
         st.subheader("Campaign Analytics")
-        with get_db_connection() as conn:
-            campaigns_df = pd.read_sql_query('SELECT * FROM campaigns ORDER BY created_date DESC', conn)
+        campaigns_df = load_data('campaigns')
         if not campaigns_df.empty:
             st.metric("Total Campaigns", len(campaigns_df))
             active_campaigns = campaigns_df[
@@ -644,8 +642,7 @@ def ai_predictions_page():
 
 def campaign_performance_page():
     st.header("📋 Campaign Performance Analysis")
-    with get_db_connection() as conn:
-        campaigns_df = pd.read_sql_query('SELECT * FROM campaigns ORDER BY start_date DESC', conn)
+    campaigns_df = load_data('campaigns')
     if campaigns_df.empty:
         st.info("No campaigns available")
         return
@@ -659,17 +656,15 @@ def campaign_performance_page():
             st.write(f"**Type:** {campaign_info['campaign_type'].replace('_', ' ').title()}")
             st.write(f"**Duration:** {campaign_info['start_date']} to {campaign_info['end_date']}")
             st.write(f"**Products:** {campaign_info['offer_products']}")
-            if st.button("Analyze Campaign Performance"):
-                perf_df = pd.read_sql_query('''
-                    SELECT * FROM campaign_performance WHERE campaign_id = ?
-                ''', get_db_connection(), params=[selected_campaign])
+            perf_df = load_data('campaign_performance')
+            perf_df = perf_df[perf_df['campaign_id'] == selected_campaign]
+            if not perf_df.empty:
                 st.write("Performance data")
                 st.dataframe(perf_df, use_container_width=True)
         with col2:
             st.subheader("Quick Stats")
-            perf_df = pd.read_sql_query('''
-                SELECT * FROM campaign_performance WHERE campaign_id = ?
-            ''', get_db_connection(), params=[selected_campaign])
+            perf_df = load_data('campaign_performance')
+            perf_df = perf_df[perf_df['campaign_id'] == selected_campaign]
             if not perf_df.empty:
                 total_uplift = perf_df['uplift_percent'].mean()
                 best_category = perf_df.loc[perf_df['uplift_percent'].idxmax(), 'category'] if not perf_df['uplift_percent'].empty else ''
@@ -801,6 +796,8 @@ def daily_sales_page():
         st.info("No sales data available")
 
 def main():
+    if 'csv_initialized' not in st.session_state:
+        init_csv_files()
     st.title("📈 Sales Prediction & Campaign Analysis System")
     st.markdown("AI-powered sales forecasting, campaign planning, and performance analysis")
     st.sidebar.title("Navigation")
@@ -810,7 +807,8 @@ def main():
         "🎯 Campaign Management",
         "📈 Sales Analysis",
         "🤖 AI Predictions",
-        "📋 Campaign Performance"
+        "📋 Campaign Performance",
+        "💾 Export Data"
     ])
     if page == "🏪 Store Management":
         store_management_page()
@@ -824,6 +822,17 @@ def main():
         ai_predictions_page()
     elif page == "📋 Campaign Performance":
         campaign_performance_page()
+    elif page == "💾 Export Data":
+        st.header("💾 Export Data to Excel")
+        st.write("Download all data as an Excel file. Large datasets will be split into multiple sheets if necessary.")
+        if st.button("Export All Data"):
+            excel_data = export_to_excel()
+            st.download_button(
+                label="Download Excel File",
+                data=excel_data,
+                file_name="sales_campaign_data.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
 if __name__ == "__main__":
     main()
