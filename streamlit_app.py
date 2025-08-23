@@ -33,11 +33,11 @@ def init_csv_files():
     
     # Define column structures for each CSV
     file_columns = {
-        'stores': ['store_id', 'store_name', 'created_date'],
-        'daily_sales': ['id', 'date', 'store_id', 'category', 'product_name', 'sales_amount'],
+        'stores': ['store_name', 'created_date'],
+        'daily_sales': ['id', 'date', 'store_name', 'category', 'product_name', 'sales_amount'],
         'campaigns': ['campaign_id', 'campaign_name', 'start_date', 'end_date', 'campaign_type', 
                      'target_stores', 'offer_products', 'offer_description', 'created_date'],
-        'campaign_performance': ['id', 'campaign_id', 'store_id', 'product_name', 'category', 
+        'campaign_performance': ['id', 'campaign_id', 'store_name', 'product_name', 'category', 
                                 'sales_before', 'sales_during', 'sales_after', 'units_before', 
                                 'units_during', 'units_after', 'uplift_percent', 'units_uplift_percent']
     }
@@ -54,7 +54,6 @@ def load_data(table_name):
         local_path = CSV_FILES[table_name]
         df = pd.read_csv(local_path)
         if table_name == 'daily_sales' or table_name == 'campaigns':
-            # Validate date columns
             date_cols = ['date'] if table_name == 'daily_sales' else ['start_date', 'end_date']
             invalid_rows = []
             for col in date_cols:
@@ -65,7 +64,7 @@ def load_data(table_name):
                 st.warning(f"Removed {len(invalid_rows)} invalid date entries from {table_name}.csv for column '{col}'. Check your data.")
             elif invalid_rows and df.empty:
                 st.warning(f"All rows in {table_name}.csv had invalid dates for '{col}'. Returning original data with warnings.")
-                df = pd.read_csv(local_path)  # Return original data with invalid dates
+                df = pd.read_csv(local_path)
         return df
     except FileNotFoundError:
         init_csv_files()
@@ -97,20 +96,16 @@ def slugify(text: str) -> str:
     s = s.strip('-')
     return s
 
-def store_id_exists(store_id: str) -> bool:
+def store_name_exists(store_name: str) -> bool:
     stores_df = load_data('stores')
-    return store_id in stores_df['store_id'].values
+    return store_name in stores_df['store_name'].values
 
-def generate_store_id_from_name(name: str) -> str:
+def generate_store_name_id(name: str) -> str:
     base = slugify(name)
     if not base:
         base = 'store'
-    store_id = base
-    i = 1
-    while store_id_exists(store_id):
-        i += 1
-        store_id = f"{base}-{i}"
-    return store_id
+    store_name = name
+    return store_name  # No need for unique ID since store_name is unique
 
 def generate_campaign_id(name: str) -> str:
     base = slugify(name)
@@ -168,16 +163,16 @@ CAMPAIGN_TYPES = ['Bundle Offer', 'Loyalty Program']
 # -------------------------------
 # Helpers (Data access)
 # -------------------------------
-def add_store(store_id, store_name):
+def add_store(store_name):
     try:
         stores_df = load_data('stores')
-        new_store = pd.DataFrame({
-            'store_id': [store_id],
-            'store_name': [store_name],
-            'created_date': [datetime.now().date()]
-        })
-        stores_df = pd.concat([stores_df, new_store], ignore_index=True)
-        save_data(stores_df, 'stores')
+        if store_name not in stores_df['store_name'].values:
+            new_store = pd.DataFrame({
+                'store_name': [store_name],
+                'created_date': [datetime.now().date()]
+            })
+            stores_df = pd.concat([stores_df, new_store], ignore_index=True)
+            save_data(stores_df, 'stores')
         return True
     except Exception as e:
         st.error(f"Error adding store: {e}")
@@ -210,11 +205,10 @@ def import_stores_from_csv(csv_file):
             if not store_name:
                 errors.append(f"Skipped row due to missing data: {row.to_dict()}")
                 continue
-            store_id = generate_store_id_from_name(store_name)
-            if add_store(store_id, store_name):
+            if add_store(store_name):
                 imported += 1
             else:
-                errors.append(f"Failed to add store {store_id} - {store_name}")
+                errors.append(f"Failed to add store {store_name}")
         return imported, errors
     except Exception as e:
         return 0, [f"Error reading CSV: {e}"]
@@ -244,7 +238,7 @@ def add_campaign(campaign_name, start_date, end_date, campaign_type, target_stor
 # -------------------------------
 # Core: Sales & ML helpers
 # -------------------------------
-def add_daily_sales(date, store_id, category, product_name, sales_amount):
+def add_daily_sales(date, store_name, category, product_name, sales_amount):
     if not is_valid_date(date):
         st.error(f"Invalid date format: {date}. Use YYYY-MM-DD (e.g., 2025-01-01).")
         return False
@@ -254,8 +248,8 @@ def add_daily_sales(date, store_id, category, product_name, sales_amount):
     if not product_name:
         st.error("Product name cannot be empty")
         return False
-    if not store_id_exists(store_id):
-        st.error(f"Store ID {store_id} does not exist. Please add the store first.")
+    if not store_name:
+        st.error("Store name cannot be empty")
         return False
     if product_name not in PRODUCTS_BY_CATEGORY.get(category, []) and product_name != "Other (Custom)":
         st.warning(f"Product {product_name} not in predefined list for {category}. Adding as custom.")
@@ -265,28 +259,26 @@ def add_daily_sales(date, store_id, category, product_name, sales_amount):
         new_sale = pd.DataFrame({
             'id': [new_id],
             'date': [date],
-            'store_id': [store_id],
+            'store_name': [store_name],
             'category': [category],
             'product_name': [product_name],
             'sales_amount': [sales_amount]
         })
         daily_sales_df = pd.concat([daily_sales_df, new_sale], ignore_index=True)
         save_data(daily_sales_df, 'daily_sales')
-        st.success(f"Successfully added sales data for {product_name} in {category}")
+        st.success(f"Successfully added sales data for {product_name} in {category} at {store_name}")
         return True
     except Exception as e:
         st.error(f"Error adding sales data for {product_name}: {str(e)}")
         return False
 
-def get_sales_data(store_id=None, start_date=None, end_date=None, category=None, product_name=None, campaign_id=None):
+def get_sales_data(store_name=None, start_date=None, end_date=None, category=None, product_name=None, campaign_id=None):
     try:
         daily_sales_df = load_data('daily_sales')
-        stores_df = load_data('stores')
         campaigns_df = load_data('campaigns')
-        if daily_sales_df.empty or stores_df.empty:
+        if daily_sales_df.empty:
             return pd.DataFrame()
-        df = daily_sales_df.merge(stores_df[['store_id', 'store_name']], on='store_id', how='left')
-        df['store_name'] = df['store_name'].fillna('Unknown Store')
+        df = daily_sales_df.copy()
         if campaign_id:
             campaign = campaigns_df[campaigns_df['campaign_id'] == campaign_id]
             if not campaign.empty:
@@ -297,14 +289,14 @@ def get_sales_data(store_id=None, start_date=None, end_date=None, category=None,
                 df['date'] = pd.to_datetime(df['date'], format='mixed', dayfirst=True)
                 df = df[(df['date'] >= start_date) & (df['date'] <= end_date)]
                 if target_stores and 'All Stores' not in target_stores:
-                    df = df[df['store_id'].isin(target_stores)]
+                    df = df[df['store_name'].isin(target_stores)]
                 if offer_products:
                     df = df[df['product_name'].isin(offer_products)]
-        if store_id:
-            if isinstance(store_id, list):
-                df = df[df['store_id'].isin(store_id)]
+        if store_name:
+            if isinstance(store_name, list):
+                df = df[df['store_name'].isin(store_name)]
             else:
-                df = df[df['store_id'] == store_id]
+                df = df[df['store_name'] == store_name]
         if start_date and not campaign_id:
             df['date'] = pd.to_datetime(df['date'], format='mixed', dayfirst=True)
             df = df[df['date'] >= pd.to_datetime(start_date)]
@@ -340,16 +332,16 @@ def create_prediction_model(data, campaigns_df):
         if 'All Stores' in target_stores or not target_stores:
             data.loc[mask, 'campaign_active'] = 1
         else:
-            data.loc[mask & data['store_id'].isin(target_stores), 'campaign_active'] = 1
+            data.loc[mask & data['store_name'].isin(target_stores), 'campaign_active'] = 1
     data['day_of_week'] = data['date'].dt.dayofweek
     data['month'] = data['date'].dt.month
     data['day_of_month'] = data['date'].dt.day
     data['is_weekend'] = (data['day_of_week'] >= 5).astype(int)
-    data = data.sort_values(['store_id', 'category', 'date'])
-    data['sales_lag_1'] = data.groupby(['store_id', 'category'])['sales_amount'].shift(1)
-    data['sales_lag_7'] = data.groupby(['store_id', 'category'])['sales_amount'].shift(7)
-    data['sales_rolling_7'] = data.groupby(['store_id', 'category'])['sales_amount'].rolling(7).mean().reset_index(0, drop=True)
-    data_encoded = pd.get_dummies(data, columns=['store_id', 'category'], prefix=['store', 'cat'])
+    data = data.sort_values(['store_name', 'category', 'date'])
+    data['sales_lag_1'] = data.groupby(['store_name', 'category'])['sales_amount'].shift(1)
+    data['sales_lag_7'] = data.groupby(['store_name', 'category'])['sales_amount'].shift(7)
+    data['sales_rolling_7'] = data.groupby(['store_name', 'category'])['sales_amount'].rolling(7).mean().reset_index(0, drop=True)
+    data_encoded = pd.get_dummies(data, columns=['store_name', 'category'], prefix=['store', 'cat'])
     feature_cols = [col for col in data_encoded.columns if col.startswith(('store_', 'cat_')) or 
                     col in ['day_of_week', 'month', 'day_of_month', 'is_weekend', 
                             'sales_lag_1', 'sales_lag_7', 'sales_rolling_7', 'campaign_active']]
@@ -387,19 +379,18 @@ def store_management_page():
     with col1:
         st.subheader("Add New Store")
         with st.form("add_store_form"):
-            store_name = st.text_input("Store", placeholder="e.g., Balussery MYG Store")
+            store_name = st.text_input("Store Name", placeholder="e.g., Balussery MYG Store")
             if st.form_submit_button("Add Store"):
                 if store_name:
-                    store_id = generate_store_id_from_name(store_name)
-                    if add_store(store_id, store_name):
+                    if add_store(store_name):
                         st.success("Store added successfully!")
                     else:
                         st.error("Error adding store")
                 else:
-                    st.error("Please fill the Store field")
+                    st.error("Please fill the Store Name field")
     with col2:
         st.subheader("Import Stores from CSV")
-        uploaded_file = st.file_uploader("Upload CSV (column: Store)", type=["csv"])
+        uploaded_file = st.file_uploader("Upload CSV (column: Store Name)", type=["csv"])
         if uploaded_file is not None:
             count, errors = import_stores_from_csv(uploaded_file)
             st.success(f"Imported {count} stores from CSV")
@@ -409,7 +400,7 @@ def store_management_page():
     st.subheader("Existing Stores")
     stores_df = get_all_stores()
     if not stores_df.empty:
-        st.dataframe(stores_df[['store_id', 'store_name', 'created_date']], use_container_width=True)
+        st.dataframe(stores_df[['store_name', 'created_date']], use_container_width=True)
     else:
         st.info("No stores added yet")
 
@@ -423,8 +414,8 @@ def daily_sales_page():
     with col1:
         st.subheader("Add Sales Data")
         with st.form("sales_entry_form"):
-            date = st.date_input("Date", value=datetime.now().date())
-            store_id = st.selectbox("Store", stores_df['store_id'].tolist())
+            date = st.date_input("Date", value=datetime(2025, 8, 23, 15, 51))  # Set to 03:51 PM IST, Aug 23, 2025
+            store_name = st.selectbox("Store Name", stores_df['store_name'].tolist())
             category = st.selectbox("Category", ITEM_CATEGORIES)
             if category:
                 available_products = PRODUCTS_BY_CATEGORY.get(category, []) + ["Other (Custom)"]
@@ -435,22 +426,22 @@ def daily_sales_page():
                 product_name = st.text_input("Product Name")
             sales_amount = st.number_input("Sales Amount (₹)", min_value=0.0, format="%.2f")
             if st.form_submit_button("Add Sales Data"):
-                if product_name and sales_amount >= 0 and category and store_id:
+                if product_name and sales_amount >= 0 and category and store_name:
                     date_str = date.strftime('%Y-%m-%d')
-                    if add_daily_sales(date_str, store_id, category, product_name, sales_amount):
-                        st.success(f"Sales data for {product_name} added successfully!")
+                    if add_daily_sales(date_str, store_name, category, product_name, sales_amount):
+                        st.success(f"Sales data for {product_name} added successfully at {store_name}!")
                     else:
                         st.error(f"Failed to add sales data for {product_name}")
                 else:
-                    st.error("Please fill all required fields (Date, Store, Category, Product Name, Sales Amount)")
+                    st.error("Please fill all required fields (Date, Store Name, Category, Product Name, Sales Amount)")
     with col2:
         st.subheader("Bulk Upload")
-        st.info("CSV format: date,store_id,category,product_name,sales_amount (date in YYYY-MM-DD)")
+        st.info("CSV format: date,store_name,category,product_name,sales_amount (date in YYYY-MM-DD)")
         uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
         if uploaded_file is not None:
             try:
                 df = pd.read_csv(uploaded_file)
-                required_cols = ['date', 'store_id', 'category', 'product_name', 'sales_amount']
+                required_cols = ['date', 'store_name', 'category', 'product_name', 'sales_amount']
                 if all(col in df.columns for col in required_cols):
                     df = df[df['date'].apply(is_valid_date)]
                     if df.empty:
@@ -465,24 +456,21 @@ def daily_sales_page():
                     if not non_standard_products.empty:
                         st.warning(f"Non-standard products detected (will be added as custom):\n{non_standard_products.drop_duplicates().to_string(index=False)}")
                     st.write("Preview of data to be imported:")
-                    # Merge with stores to show store_name
-                    preview_df = df.merge(stores_df[['store_id', 'store_name']], on='store_id', how='left')
-                    preview_df['store_name'] = preview_df['store_name'].fillna('Unknown Store')
-                    st.dataframe(preview_df[['date', 'store_name', 'category', 'product_name', 'sales_amount']].head())
+                    st.dataframe(df[['date', 'store_name', 'category', 'product_name', 'sales_amount']].head())
                     if st.button("Import Data"):
                         errors = []
                         success_count = 0
                         for _, row in df.iterrows():
                             if add_daily_sales(
                                 row['date'], 
-                                row['store_id'], 
+                                row['store_name'], 
                                 row['category'], 
                                 row['product_name'], 
                                 row['sales_amount']
                             ):
                                 success_count += 1
                             else:
-                                errors.append(f"Failed to add: {row['product_name']} ({row['category']})")
+                                errors.append(f"Failed to add: {row['product_name']} ({row['category']}) at {row['store_name']}")
                         if success_count > 0:
                             st.success(f"Imported {success_count} records successfully!")
                         if errors:
@@ -490,7 +478,7 @@ def daily_sales_page():
                             for err in errors[:5]:
                                 st.error(err)
                             if len(errors) > 5:
-                                st.error(f"...and {len(errors)-5} more errors")
+                                st.error(f"...and {len(errors) - 5} more errors")
                 else:
                     st.error(f"CSV must contain columns: {required_cols}")
             except Exception as e:
@@ -516,16 +504,16 @@ def sales_analysis_page():
     with col1:
         stores_df = get_all_stores()
         if not stores_df.empty:
-            selected_store = st.selectbox("Select Store", ["All"] + stores_df['store_id'].tolist())
+            selected_store = st.selectbox("Select Store", ["All"] + stores_df['store_name'].tolist())
         else:
             selected_store = None
             st.warning("No stores available")
     with col2:
         selected_category = st.selectbox("Select Category", ["All"] + ITEM_CATEGORIES)
     with col3:
-        start_date = st.date_input("Start Date", value=datetime.now().date() - timedelta(days=30))
+        start_date = st.date_input("Start Date", value=datetime(2025, 8, 23, 15, 51) - timedelta(days=30))
     with col4:
-        end_date = st.date_input("End Date", value=datetime.now().date())
+        end_date = st.date_input("End Date", value=datetime(2025, 8, 23, 15, 51))
     if selected_store:
         store_filter = None if selected_store == "All" else selected_store
         category_filter = None if selected_category == "All" else selected_category
@@ -603,11 +591,10 @@ def ai_predictions_page():
             colA, colB = st.columns(2)
             with colA:
                 stores_df = get_all_stores()
-                store_options = ['All Stores'] + stores_df['store_id'].tolist()
+                store_options = ['All Stores'] + stores_df['store_name'].tolist()
                 selected_stores = st.multiselect("Stores", store_options, default=['All Stores'])
                 selected_categories = st.multiselect("Categories", ITEM_CATEGORIES)
-                prediction_date = st.date_input("Prediction Date", 
-                                               value=datetime.now().date() + timedelta(days=1))
+                prediction_date = st.date_input("Prediction Date", value=datetime(2025, 8, 23, 15, 51) + timedelta(days=1))
             with colB:
                 campaigns_df = load_data('campaigns')
                 campaign_options = ['None'] + campaigns_df['campaign_name'].tolist()
@@ -621,8 +608,8 @@ def ai_predictions_page():
             if st.button("Generate Prediction") and selected_categories:
                 predictions = []
                 pred_date = pd.to_datetime(prediction_date)
-                target_stores = stores_df['store_id'].tolist() if 'All Stores' in selected_stores else selected_stores
-                for store_id in target_stores:
+                target_stores = stores_df['store_name'].tolist() if 'All Stores' in selected_stores else selected_stores
+                for store_name in target_stores:
                     for category in selected_categories:
                         features = {
                             'day_of_week': pred_date.dayofweek,
@@ -631,7 +618,7 @@ def ai_predictions_page():
                             'is_weekend': int(pred_date.dayofweek >= 5),
                             'campaign_active': int(campaign_active)
                         }
-                        recent_sales = get_sales_data(store_id, 
+                        recent_sales = get_sales_data(store_name, 
                                                       (pred_date - timedelta(days=30)).strftime('%Y-%m-%d'),
                                                       (pred_date - timedelta(days=1)).strftime('%Y-%m-%d'),
                                                       category)
@@ -647,8 +634,8 @@ def ai_predictions_page():
                             vec.append(features.get(col, 0))
                         for cat in ITEM_CATEGORIES:
                             vec.append(1 if cat == category else 0)
-                        for store in stores_df['store_id']:
-                            vec.append(1 if store == store_id else 0)
+                        for store in stores_df['store_name']:
+                            vec.append(1 if store == store_name else 0)
                         try:
                             vec_scaled = scaler.transform([vec])
                         except Exception:
@@ -661,7 +648,6 @@ def ai_predictions_page():
                             if any(product in offer_products for product in PRODUCTS_BY_CATEGORY.get(category, [])):
                                 uplift_factor = 1.2  # Fixed uplift for Bundle Offer/Loyalty Program
                                 predicted *= uplift_factor
-                        store_name = stores_df[stores_df['store_id'] == store_id]['store_name'].iloc[0] if store_id_exists(store_id) else 'Unknown Store'
                         predictions.append({
                             'Store': store_name,
                             'Category': category,
@@ -672,7 +658,7 @@ def ai_predictions_page():
                 pred_df = pd.DataFrame(predictions)
                 st.dataframe(pred_df, use_container_width=True)
                 fig = px.bar(pred_df, x='Category', y='Predicted Sales', color='Store',
-                             title=f'Sales Prediction for {", ".join([stores_df[stores_df["store_id"] == sid]["store_name"].iloc[0] if store_id_exists(sid) else "Unknown Store" for sid in target_stores])} on {prediction_date}')
+                             title=f'Sales Prediction for {", ".join(target_stores)} on {prediction_date}')
                 st.plotly_chart(fig, use_container_width=True)
                 csv = pred_df.to_csv(index=False)
                 st.download_button(
@@ -698,11 +684,11 @@ def campaign_analysis_page():
         campaign_name = st.text_input("Campaign Name", placeholder="e.g., Summer Bundle 2025")
         col1, col2 = st.columns(2)
         with col1:
-            start_date = st.date_input("Start Date", value=datetime.now().date())
+            start_date = st.date_input("Start Date", value=datetime(2025, 8, 23, 15, 51))
         with col2:
-            end_date = st.date_input("End Date", value=datetime.now().date() + timedelta(days=7))
+            end_date = st.date_input("End Date", value=datetime(2025, 8, 23, 15, 51) + timedelta(days=7))
         campaign_type = st.selectbox("Campaign Type", CAMPAIGN_TYPES)
-        store_options = ['All Stores'] + stores_df['store_id'].tolist()
+        store_options = ['All Stores'] + stores_df['store_name'].tolist()
         target_stores = st.multiselect("Target Stores", store_options, default=['All Stores'])
         offer_products = st.multiselect("Offer Products", ALL_PRODUCTS)
         if "Other (Custom)" in offer_products:
@@ -738,7 +724,7 @@ def campaign_analysis_page():
     if selected_campaign:
         campaign_id = campaign['campaign_id'].iloc[0] if not campaign.empty else None
         target_stores = selected_stores if 'All Stores' not in selected_stores else None
-        sales_data = get_sales_data(store_id=target_stores, product_name=selected_products, campaign_id=campaign_id)
+        sales_data = get_sales_data(store_name=target_stores, product_name=selected_products, campaign_id=campaign_id)
         if not sales_data.empty:
             colA, colB, colC = st.columns(3)
             with colA:
