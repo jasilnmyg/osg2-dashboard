@@ -1,7 +1,4 @@
-streamlit
-pandas
-openpyxl
-reportlab
-xlsxwriter
-plotly
-scikit-learn
+streamlit==1.37.0
+ccxt==4.3.81
+pandas==2.2.2
+requests==2.32.3
